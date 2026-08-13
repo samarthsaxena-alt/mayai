@@ -1,4 +1,4 @@
-# Open Receptionist
+# MayAI
 
 A free, open-source AI phone receptionist for small businesses, built on
 [PyAI](https://pyai.com) Omni. Pick your business type, feed it what you
