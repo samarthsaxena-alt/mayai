@@ -35,6 +35,7 @@ export function buildToolDefs(config) {
           time: { type: "string", description: "Time, as stated by the caller (e.g. '7:30 PM')." },
           [tpl.bookingDetailField.key]: { type: tpl.bookingDetailField.type === "integer" ? "integer" : "string", description: tpl.bookingDetailField.label },
         },
+        additionalProperties: false,
       },
     },
     {
@@ -51,6 +52,7 @@ export function buildToolDefs(config) {
           grounded: { type: "boolean", description: "True only if the answer came from the knowledge base." },
           source_excerpt: { type: "string", description: "The exact excerpt from the knowledge base you based the answer on, if any." },
         },
+        additionalProperties: false,
       },
     },
     {
@@ -61,6 +63,7 @@ export function buildToolDefs(config) {
         type: "object",
         required: ["note"],
         properties: { note: { type: "string" } },
+        additionalProperties: false,
       },
     },
     {
@@ -72,6 +75,7 @@ export function buildToolDefs(config) {
         type: "object",
         required: ["reason"],
         properties: { reason: { type: "string" } },
+        additionalProperties: false,
       },
     },
   ];

@@ -710,6 +710,97 @@ async function renderAdvanced() {
   await renderPhoneNumberBlock(document.getElementById("advanced-numbers"));
 }
 
+// ---------------------------------------------------------------- Analytics
+async function renderAnalytics() {
+  const a = await api("/api/analytics/summary");
+  app.innerHTML = "";
+
+  const groundingPct = a.grounding_rate == null ? null : Math.round(a.grounding_rate * 100);
+  const maxDaily = Math.max(1, ...a.daily_volume.map((d) => d.calls));
+  const totalStatus = Object.values(a.status_breakdown).reduce((s, n) => s + n, 0);
+
+  const wrap = el(`<div>
+  <div class="card">
+    <h2>Analytics</h2>
+    <p class="hint">Every number here comes from real calls. No calls yet = honest zeros, not a demo chart.</p>
+
+    <div class="stat-row">
+      <div class="stat-tile">
+        <div class="stat-num">${a.total_calls}</div>
+        <div class="stat-label">Total calls</div>
+      </div>
+      <div class="stat-tile ${groundingPct !== null && groundingPct < 90 ? "warn" : ""}">
+        <div class="stat-num">${groundingPct === null ? "—" : groundingPct + "%"}</div>
+        <div class="stat-label">Grounded answer rate</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-num">${a.booking_count}</div>
+        <div class="stat-label">${a.booking_label}s made</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-num">${a.avg_call_duration_s ? Math.round(a.avg_call_duration_s) + "s" : "—"}</div>
+        <div class="stat-label">Avg. call length</div>
+      </div>
+    </div>
+
+    <p class="hint" style="margin-top:2px">Grounded answer rate is the needle-mover metric (see README) — the share of menu/Q&amp;A answers that actually traced to real uploaded knowledge instead of being guessed.</p>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 12px">Call outcomes</h3>
+    ${
+      totalStatus === 0
+        ? '<p class="muted">No calls yet.</p>'
+        : `<div class="status-bars">
+        ${["completed", "partial", "escalated", "in_progress"]
+          .filter((s) => a.status_breakdown[s] > 0)
+          .map((s) => {
+            const pct = Math.round((a.status_breakdown[s] / totalStatus) * 100);
+            return `<div class="status-bar-row">
+              <span class="pill ${s}" style="width:90px;text-align:center">${s}</span>
+              <div class="status-bar-track"><div class="status-bar-fill ${s}" style="width:${pct}%"></div></div>
+              <span class="muted" style="width:60px;text-align:right">${a.status_breakdown[s]} (${pct}%)</span>
+            </div>`;
+          })
+          .join("")}
+      </div>`
+    }
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 12px">Calls, last 14 days</h3>
+    <div class="daily-chart">
+      ${a.daily_volume
+        .map(
+          (d) =>
+            `<div class="daily-bar-col" title="${d.date}: ${d.calls} calls">
+              <div class="daily-bar" style="height:${Math.max(2, (d.calls / maxDaily) * 80)}px"></div>
+              <div class="daily-bar-label">${d.date.slice(8)}</div>
+            </div>`
+        )
+        .join("")}
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 12px">Questions by type</h3>
+    ${
+      a.qa_by_intent.length === 0
+        ? '<p class="muted">No questions logged yet.</p>'
+        : `<table>
+        <thead><tr><th>Intent</th><th>Asked</th><th>Grounded</th></tr></thead>
+        <tbody>
+          ${a.qa_by_intent
+            .map((q) => `<tr><td>${q.intent}</td><td>${q.count}</td><td>${q.grounded}/${q.count}</td></tr>`)
+            .join("")}
+        </tbody>
+      </table>`
+    }
+  </div>
+  </div>`);
+  app.appendChild(wrap);
+}
+
 /* =========================================================================
    Router
    ========================================================================= */
@@ -719,6 +810,7 @@ const tabRenderers = {
   knowledge: renderKnowledge,
   callflow: renderCallFlow,
   actions: renderActions,
+  analytics: renderAnalytics,
   advanced: renderAdvanced,
 };
 

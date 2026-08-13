@@ -10,6 +10,7 @@ import knowledgeRoutes from "./src/routes/knowledge.js";
 import actionsRoutes from "./src/routes/actions.js";
 import webhooksRoutes from "./src/routes/webhooks.js";
 import telephonyRoutes from "./src/routes/telephony.js";
+import analyticsRoutes from "./src/routes/analytics.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { PORT = "8080" } = process.env;
@@ -34,6 +35,7 @@ await app.register(knowledgeRoutes);
 await app.register(actionsRoutes);
 await app.register(webhooksRoutes);
 await app.register(telephonyRoutes);
+await app.register(analyticsRoutes);
 
 app.get("/api/health", async () => ({ ok: true }));
 

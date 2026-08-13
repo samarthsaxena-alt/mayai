@@ -67,6 +67,28 @@ nav button.active {
 }
 .knowledge-source-tabs button.active { border-color: var(--accent); color: var(--text); }
 .skip-link { color: var(--muted); font-size: 13px; text-decoration: underline; cursor: pointer; background: none; border: none; padding: 0; }
+
+/* ---------- Analytics ---------- */
+.stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 8px; }
+.stat-tile { border: 1px solid var(--border); border-radius: 8px; padding: 14px; text-align: center; }
+.stat-tile.warn { border-color: var(--warn); }
+.stat-num { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat-label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.status-bars { display: flex; flex-direction: column; gap: 10px; }
+.status-bar-row { display: flex; align-items: center; gap: 10px; }
+.status-bar-track { flex: 1; height: 10px; background: #10121a; border-radius: 6px; overflow: hidden; }
+.status-bar-fill { height: 100%; border-radius: 6px; }
+.status-bar-fill.completed { background: var(--ok); }
+.status-bar-fill.partial { background: var(--warn); }
+.status-bar-fill.escalated { background: var(--bad); }
+.status-bar-fill.in_progress { background: var(--muted); }
+.daily-chart { display: flex; align-items: flex-end; gap: 4px; height: 110px; }
+.daily-bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+.daily-bar { width: 70%; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px; }
+.daily-bar-label { font-size: 9px; color: var(--muted); margin-top: 4px; }
+@media (max-width: 640px) {
+  .stat-row { grid-template-columns: repeat(2, 1fr); }
+}
 main {
   max-width: 920px;
   margin: 0 auto;
