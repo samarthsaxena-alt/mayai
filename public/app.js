@@ -40,24 +40,275 @@ async function refreshHeader() {
   }
 }
 
-// ---------------------------------------------------------------- Templates
+/* =========================================================================
+   QUICK START — the zero-friction path. Three screens, one at a time, each
+   with a single obvious next action. This is the front door; Customize (the
+   original 6-tab builder) is for people who already have a working agent
+   and want to tweak it.
+   ========================================================================= */
+
+function wizardShell(stepIndex, bodyHtml) {
+  const steps = ["What kind of business?", "What do you offer?", "Go live"];
+  app.innerHTML = "";
+  app.appendChild(
+    el(`<div>
+      <div class="wizard-steps">
+        ${steps.map((s, i) => `<div class="ws ${i === stepIndex ? "active" : i < stepIndex ? "done" : ""}">${i + 1}. ${s}</div>`).join("")}
+      </div>
+      <div class="card">${bodyHtml}</div>
+    </div>`)
+  );
+}
+
+async function renderQuickStart() {
+  const { config } = await api("/api/config");
+  const step = config.setup_step === "live" ? 2 : config.setup_step === "knowledge" ? 1 : 0;
+  if (step === 0) return renderWizardStep1(config);
+  if (step === 1) return renderWizardStep2(config);
+  return renderWizardStep3(config);
+}
+
+async function renderWizardStep1(config) {
+  const { templates } = await api("/api/templates");
+  const byIndustry = {};
+  templates.forEach((t) => (byIndustry[t.industryLabel] = byIndustry[t.industryLabel] || []).push(t));
+
+  wizardShell(
+    0,
+    `<div class="big-question">What kind of business is this?</div>
+     <p class="hint">Pick the closest match — everything below is fully editable later, this just gets you a sensible starting point instead of a blank page.</p>
+     <label>Business name</label>
+     <input type="text" id="qs-business-name" placeholder="e.g. Piazza Verde" value="${config.business_name && config.business_name !== "My Business" ? config.business_name : ""}" />
+     <div style="margin-top:18px">
+       ${Object.entries(byIndustry)
+         .map(
+           ([industryLabel, tpls]) => `
+         <div style="margin-bottom:14px">
+           <label style="margin-bottom:8px">${industryLabel}</label>
+           <div class="template-grid">
+             ${tpls.map((t) => `<div class="template-card" data-key="${t.key}"><strong>${t.label}</strong></div>`).join("")}
+           </div>
+         </div>`
+         )
+         .join("")}
+     </div>`
+  );
+
+  let selectedKey = null;
+  app.querySelectorAll(".template-card").forEach((c) =>
+    c.addEventListener("click", () => {
+      app.querySelectorAll(".template-card").forEach((x) => x.classList.remove("selected"));
+      c.classList.add("selected");
+      selectedKey = c.dataset.key;
+      maybeContinue();
+    })
+  );
+  const nameInput = document.getElementById("qs-business-name");
+  nameInput.addEventListener("input", maybeContinue);
+
+  function maybeContinue() {
+    if (document.getElementById("qs-continue")) return;
+    if (!selectedKey || !nameInput.value.trim()) return;
+    const btn = el(`<button class="primary" id="qs-continue" style="margin-top:18px">Continue →</button>`);
+    app.querySelector(".card").appendChild(btn);
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Setting up…";
+      try {
+        await api("/api/config/template", { method: "POST", body: { template_key: selectedKey, business_name: nameInput.value.trim() } });
+        renderQuickStart();
+      } catch (err) {
+        toast(err.message, "error");
+        btn.disabled = false;
+        btn.textContent = "Continue →";
+      }
+    });
+  }
+}
+
+async function renderWizardStep2(config) {
+  const { documents, knowledge_label } = await api("/api/knowledge");
+  wizardShell(
+    1,
+    `<div class="big-question">What do you offer?</div>
+     <p class="hint">${knowledge_label || "Menu / info sheet"} — the agent only answers from this, never guesses. Pick whichever is easiest, no website needed.</p>
+     <div class="knowledge-source-tabs">
+       <button data-src="upload" class="active">Upload a file</button>
+       <button data-src="url">Paste a link</button>
+       <button data-src="text">Just type it in</button>
+     </div>
+     <div id="qs-source-body"></div>
+     <div id="qs-doc-list" style="margin-top:16px"></div>
+     <div style="margin-top:18px;display:flex;gap:14px;align-items:center">
+       <button class="primary" id="qs-continue-2">Continue →</button>
+       <button class="skip-link" id="qs-skip-2">Skip for now — I'll add this later</button>
+     </div>`
+  );
+  renderKnowledgeSourceBody("upload");
+  renderQsDocList(documents);
+
+  app.querySelectorAll(".knowledge-source-tabs button").forEach((b) =>
+    b.addEventListener("click", () => {
+      app.querySelectorAll(".knowledge-source-tabs button").forEach((x) => x.classList.remove("active"));
+      b.classList.add("active");
+      renderKnowledgeSourceBody(b.dataset.src);
+    })
+  );
+  document.getElementById("qs-continue-2").addEventListener("click", () => renderWizardStep3ViaFinish());
+  document.getElementById("qs-skip-2").addEventListener("click", () => renderWizardStep3ViaFinish());
+}
+
+function renderQsDocList(documents) {
+  const box = document.getElementById("qs-doc-list");
+  if (!box) return;
+  box.innerHTML = documents.length
+    ? documents.map((d) => `<div class="doc-row"><div>${d.filename}</div><span class="pill ${d.status}">${d.status}</span></div>`).join("")
+    : "";
+}
+
+function renderKnowledgeSourceBody(src) {
+  const box = document.getElementById("qs-source-body");
+  if (src === "upload") {
+    box.innerHTML = `<input type="file" id="qs-pdf-input" accept="application/pdf" /> <button class="primary" id="qs-upload-btn" style="margin-left:8px">Upload</button>`;
+    document.getElementById("qs-upload-btn").addEventListener("click", async () => {
+      const input = document.getElementById("qs-pdf-input");
+      if (!input.files[0]) return toast("Choose a file first.", "error");
+      const form = new FormData();
+      form.append("file", input.files[0]);
+      try {
+        toast("Uploading…");
+        await api("/api/knowledge/upload", { method: "POST", body: form });
+        toast("Uploaded — indexing now.");
+        const { documents } = await api("/api/knowledge");
+        renderQsDocList(documents);
+      } catch (err) {
+        toast(err.message, "error");
+      }
+    });
+  } else if (src === "url") {
+    box.innerHTML = `<input type="text" id="qs-url-input" placeholder="https://www.google.com/maps/place/... or your Facebook Page" /> <button class="primary" id="qs-url-btn" style="margin-left:8px">Add</button>`;
+    document.getElementById("qs-url-btn").addEventListener("click", async () => {
+      const url = document.getElementById("qs-url-input").value.trim();
+      if (!url) return toast("Paste a link first.", "error");
+      try {
+        await api("/api/knowledge/url", { method: "POST", body: { url } });
+        toast("Added — indexing now.");
+        const { documents } = await api("/api/knowledge");
+        renderQsDocList(documents);
+      } catch (err) {
+        toast(err.message, "error");
+      }
+    });
+  } else {
+    box.innerHTML = `<textarea id="qs-text-input" placeholder="e.g. We offer: haircuts $45, color $120... Open Tue-Sun 9am-6pm. We use ammonia-free color..." style="min-height:120px"></textarea>
+      <button class="primary" id="qs-text-btn" style="margin-top:8px">Add</button>`;
+    document.getElementById("qs-text-btn").addEventListener("click", async () => {
+      const text = document.getElementById("qs-text-input").value.trim();
+      if (!text) return toast("Type something first.", "error");
+      try {
+        await api("/api/knowledge/text", { method: "POST", body: { text } });
+        toast("Added — indexing now.");
+        const { documents } = await api("/api/knowledge");
+        renderQsDocList(documents);
+      } catch (err) {
+        toast(err.message, "error");
+      }
+    });
+  }
+}
+
+async function renderWizardStep3ViaFinish() {
+  wizardShell(2, `<div class="big-question">Going live…</div><p class="hint">Setting up your agent.</p>`);
+  try {
+    await api("/api/config/finish-setup", { method: "POST" });
+  } catch (err) {
+    toast(err.message, "error");
+  }
+  renderQuickStart();
+}
+
+async function renderWizardStep3(config) {
+  wizardShell(
+    2,
+    `<div class="big-question">You're set up.</div>
+     <p class="hint">Your agent is real and configured. Last step is a phone number — that's the only part with a real cost, so nothing happens here without you clicking it.</p>
+     <div id="qs-numbers"></div>
+     <div style="margin-top:18px"><a href="#" id="qs-customize-link">Want to fine-tune what it says? Go to Customize →</a></div>`
+  );
+  await renderPhoneNumberBlock(document.getElementById("qs-numbers"));
+  document.getElementById("qs-customize-link").addEventListener("click", (e) => {
+    e.preventDefault();
+    switchMode("customize");
+  });
+}
+
+/* =========================================================================
+   Shared: phone number block (used in both Quick Start step 3 and Advanced)
+   ========================================================================= */
+async function renderPhoneNumberBlock(container) {
+  const { config } = await api("/api/config");
+  container.innerHTML = `<p class="muted">Current: ${config.phone_number || "none yet"}</p>
+    <button class="secondary" id="pn-list-btn">List my PyAI numbers</button>
+    <div id="pn-list" style="margin-top:10px"></div>`;
+  document.getElementById("pn-list-btn").addEventListener("click", async () => {
+    const box = document.getElementById("pn-list");
+    try {
+      const { data } = await api("/api/telephony/numbers");
+      box.innerHTML =
+        (data || [])
+          .map(
+            (n) => `<div class="doc-row"><div>${n.phone_number}</div>
+            <button class="secondary assign-btn" data-id="${n.id}" data-number="${n.phone_number}">Assign to this agent</button></div>`
+          )
+          .join("") || '<p class="muted">No numbers on this account yet — buy one at console.pyai.com, or a live key + POST /api/telephony/provision.</p>';
+      box.querySelectorAll(".assign-btn").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          if (!confirm(`Assign ${btn.dataset.number} to this agent? Calls will start ringing into it.`)) return;
+          try {
+            await api("/api/telephony/assign", { method: "POST", body: { number_id: btn.dataset.id, phone_number: btn.dataset.number } });
+            toast("Assigned.");
+            refreshHeader();
+            renderPhoneNumberBlock(container);
+          } catch (err) {
+            toast(err.message, "error");
+          }
+        })
+      );
+    } catch (err) {
+      box.innerHTML = `<p class="muted">${err.message}</p>`;
+    }
+  });
+}
+
+/* =========================================================================
+   CUSTOMIZE — the full 6-tab builder, generalized across industries.
+   ========================================================================= */
+
 async function renderTemplates() {
   const { templates } = await api("/api/templates");
   const { config } = await api("/api/config");
   app.innerHTML = "";
+  const byIndustry = {};
+  templates.forEach((t) => (byIndustry[t.industryLabel] = byIndustry[t.industryLabel] || []).push(t));
   app.appendChild(
     el(`<div class="card">
-      <h2>Pick a starting persona</h2>
+      <h2>Pick a starting point</h2>
       <p class="hint">Loads a real default persona + call-flow policy below. Everything stays editable afterward.</p>
-      <div class="template-grid">
-        ${templates
-          .map(
-            (t) => `<div class="template-card ${t.key === config.template_key ? "selected" : ""}" data-key="${t.key}">
-              <strong>${t.label}</strong>
-            </div>`
-          )
-          .join("")}
-      </div>
+      ${Object.entries(byIndustry)
+        .map(
+          ([industryLabel, tpls]) => `
+        <div style="margin-bottom:16px">
+          <label style="margin-bottom:8px">${industryLabel}</label>
+          <div class="template-grid">
+            ${tpls
+              .map(
+                (t) => `<div class="template-card ${t.key === config.template_key ? "selected" : ""}" data-key="${t.key}"><strong>${t.label}</strong></div>`
+              )
+              .join("")}
+          </div>
+        </div>`
+        )
+        .join("")}
     </div>`)
   );
   app.querySelectorAll(".template-card").forEach((cardEl) =>
@@ -73,7 +324,6 @@ async function renderTemplates() {
   );
 }
 
-// ----------------------------------------------------------------- Behavior
 async function renderBehavior() {
   const { config } = await api("/api/config");
   app.innerHTML = "";
@@ -81,8 +331,8 @@ async function renderBehavior() {
     el(`<div class="card">
       <h2>Behavior</h2>
       <p class="hint">These fields ARE the system prompt sent to the live agent. Save to push the change to the next call.</p>
-      <label>Restaurant name</label>
-      <input type="text" id="restaurant_name" value="${config.restaurant_name || ""}" />
+      <label>Business name</label>
+      <input type="text" id="business_name" value="${config.business_name || ""}" />
       <label>Greeting variants</label>
       <p class="hint" style="margin-top:-2px">A real receptionist doesn't say the exact same line every call. Add a few — PyAI rotates between them per call. The first one also serves as the fallback.</p>
       <div id="greeting-variants"></div>
@@ -96,8 +346,7 @@ async function renderBehavior() {
       <div style="margin-top:14px"><button class="primary" id="save-behavior">Save</button></div>
     </div>`)
   );
-  // Greeting variants: render one input per existing variant (seeded from the
-  // template, or a single blank if none yet), each removable.
+
   const variantsBox = document.getElementById("greeting-variants");
   let variants = [];
   try {
@@ -134,7 +383,7 @@ async function renderBehavior() {
       await api("/api/config/behavior", {
         method: "POST",
         body: {
-          restaurant_name: document.getElementById("restaurant_name").value,
+          business_name: document.getElementById("business_name").value,
           greeting: finalVariants[0] || "",
           greeting_variants: finalVariants,
           behavior_role: document.getElementById("behavior_role").value,
@@ -150,23 +399,25 @@ async function renderBehavior() {
   });
 }
 
-// ---------------------------------------------------------------- Knowledge
 async function renderKnowledge() {
-  const { documents, has_knowledge_base } = await api("/api/knowledge");
+  const { documents, knowledge_label } = await api("/api/knowledge");
   app.innerHTML = "";
   const card = el(`<div class="card">
     <h2>Knowledge</h2>
-    <p class="hint">Upload the menu / allergen PDF. It's actually parsed and indexed by PyAI, and grounds the agent's menu and allergy answers. No PDF uploaded yet = the agent says it doesn't have menu info.</p>
-    <input type="file" id="pdf-input" accept="application/pdf" />
-    <button class="primary" id="upload-btn" style="margin-left:8px">Upload</button>
+    <p class="hint">${knowledge_label || "Info sheet"} — actually parsed and indexed by PyAI, and grounds every answer. Nothing uploaded yet = the agent says it doesn't have that info.</p>
+    <div class="knowledge-source-tabs">
+      <button data-src="upload" class="active">Upload a file</button>
+      <button data-src="url">Paste a link</button>
+      <button data-src="text">Just type it in</button>
+    </div>
+    <div id="kb-source-body"></div>
     <div id="doc-list" style="margin-top:16px"></div>
   </div>`);
   app.appendChild(card);
 
-  const list = card.querySelector("#doc-list");
-  if (documents.length === 0) {
-    list.innerHTML = `<p class="muted">No documents uploaded yet.</p>`;
-  } else {
+  function renderList() {
+    const list = card.querySelector("#doc-list");
+    list.innerHTML = documents.length ? "" : `<p class="muted">No documents added yet.</p>`;
     documents.forEach((d) => {
       const row = el(`<div class="doc-row">
         <div>${d.filename} <span class="pill ${d.status}">${d.status}</span>
@@ -188,46 +439,103 @@ async function renderKnowledge() {
       })
     );
   }
+  renderList();
 
-  card.querySelector("#upload-btn").addEventListener("click", async () => {
-    const input = card.querySelector("#pdf-input");
-    if (!input.files[0]) return toast("Choose a PDF first.", "error");
-    const form = new FormData();
-    form.append("file", input.files[0]);
-    try {
-      toast("Uploading…");
-      await api("/api/knowledge/upload", { method: "POST", body: form });
-      toast("Uploaded — indexing now.");
-      renderKnowledge();
-    } catch (err) {
-      toast(err.message, "error");
+  function renderSourceBody(src) {
+    const box = card.querySelector("#kb-source-body");
+    if (src === "upload") {
+      box.innerHTML = `<input type="file" id="pdf-input" accept="application/pdf" /> <button class="primary" id="upload-btn" style="margin-left:8px">Upload</button>`;
+      box.querySelector("#upload-btn").addEventListener("click", async () => {
+        const input = box.querySelector("#pdf-input");
+        if (!input.files[0]) return toast("Choose a file first.", "error");
+        const form = new FormData();
+        form.append("file", input.files[0]);
+        try {
+          toast("Uploading…");
+          await api("/api/knowledge/upload", { method: "POST", body: form });
+          toast("Uploaded — indexing now.");
+          renderKnowledge();
+        } catch (err) {
+          toast(err.message, "error");
+        }
+      });
+    } else if (src === "url") {
+      box.innerHTML = `<input type="text" id="url-input" placeholder="https://www.google.com/maps/place/... or your Facebook Page" /> <button class="primary" id="url-btn" style="margin-left:8px">Add</button>`;
+      box.querySelector("#url-btn").addEventListener("click", async () => {
+        const url = box.querySelector("#url-input").value.trim();
+        if (!url) return toast("Paste a link first.", "error");
+        try {
+          await api("/api/knowledge/url", { method: "POST", body: { url } });
+          toast("Added — indexing now.");
+          renderKnowledge();
+        } catch (err) {
+          toast(err.message, "error");
+        }
+      });
+    } else {
+      box.innerHTML = `<textarea id="text-input" placeholder="Type what you offer, prices, hours, common questions..." style="min-height:120px"></textarea>
+        <button class="primary" id="text-btn" style="margin-top:8px">Add</button>`;
+      box.querySelector("#text-btn").addEventListener("click", async () => {
+        const text = box.querySelector("#text-input").value.trim();
+        if (!text) return toast("Type something first.", "error");
+        try {
+          await api("/api/knowledge/text", { method: "POST", body: { text } });
+          toast("Added — indexing now.");
+          renderKnowledge();
+        } catch (err) {
+          toast(err.message, "error");
+        }
+      });
     }
-  });
+  }
+  renderSourceBody("upload");
+  card.querySelectorAll(".knowledge-source-tabs button").forEach((b) =>
+    b.addEventListener("click", () => {
+      card.querySelectorAll(".knowledge-source-tabs button").forEach((x) => x.classList.remove("active"));
+      b.classList.add("active");
+      renderSourceBody(b.dataset.src);
+    })
+  );
 }
 
-// ---------------------------------------------------------------- Call Flow
 async function renderCallFlow() {
   const { config } = await api("/api/config");
-  const fields = [
-    ["callflow_reservation_policy", "1) Reservation — capture name, party size, date, time"],
-    ["callflow_menu_policy", "2) Menu questions — grounded in the uploaded PDF only"],
-    ["callflow_allergy_policy", "3) Allergy questions — grounded + always include the safety disclaimer"],
-    ["callflow_special_policy", "4) Special requests — birthday, proposal, etc."],
-    ["callflow_fallback_policy", "Fallback — anything else routes to a human callback"],
-  ];
+  let qaIntents = [];
+  try {
+    qaIntents = JSON.parse(config.callflow_qa_intents_json || "[]");
+  } catch {}
   app.innerHTML = "";
   const card = el(`<div class="card">
     <h2>Call Flow</h2>
-    <p class="hint">This is the real routing logic the live agent runs for its four intents + fallback — not a diagram of it.</p>
-    ${fields.map(([key, label]) => `<label>${label}</label><textarea id="${key}">${config[key] || ""}</textarea>`).join("")}
+    <p class="hint">This is the real routing logic the live agent runs for its intents + fallback — not a diagram of it.</p>
+    <label>1) Bookings</label>
+    <textarea id="cf-booking">${config.callflow_booking_policy || ""}</textarea>
+    ${qaIntents
+      .map(
+        (qa, i) => `<label>${i + 2}) ${qa.label}${qa.hardRule ? " (hard rule)" : ""}</label>
+      <textarea class="cf-qa" data-key="${qa.key}">${qa.policy || ""}</textarea>`
+      )
+      .join("")}
+    <label>${qaIntents.length + 2}) Notes</label>
+    <textarea id="cf-note">${config.callflow_note_policy || ""}</textarea>
+    <label>Fallback</label>
+    <textarea id="cf-fallback">${config.callflow_fallback_policy || ""}</textarea>
     <div style="margin-top:14px"><button class="primary" id="save-callflow">Save</button></div>
   </div>`);
   app.appendChild(card);
   document.getElementById("save-callflow").addEventListener("click", async () => {
-    const body = {};
-    fields.forEach(([key]) => (body[key] = document.getElementById(key).value));
+    const qa_policies = {};
+    card.querySelectorAll(".cf-qa").forEach((t) => (qa_policies[t.dataset.key] = t.value));
     try {
-      await api("/api/config/callflow", { method: "POST", body });
+      await api("/api/config/callflow", {
+        method: "POST",
+        body: {
+          callflow_booking_policy: document.getElementById("cf-booking").value,
+          qa_policies,
+          callflow_note_policy: document.getElementById("cf-note").value,
+          callflow_fallback_policy: document.getElementById("cf-fallback").value,
+        },
+      });
       toast("Saved — pushed to the live agent.");
     } catch (err) {
       toast(err.message, "error");
@@ -235,15 +543,14 @@ async function renderCallFlow() {
   });
 }
 
-// ------------------------------------------------------------------ Actions
 async function renderActions() {
-  const { calls } = await api("/api/actions/calls");
+  const { calls, booking_label, note_label } = await api("/api/actions/calls");
   app.innerHTML = "";
   const card = el(`<div class="card">
     <h2>Actions — call log</h2>
     <p class="hint">Every row is a real call. Status is derived from which tool the live agent actually called (or didn't) before the call ended.</p>
     <div class="table-scroll"><table>
-      <thead><tr><th>Started</th><th>Status</th><th>Reason</th><th>Reservations</th><th>Q&amp;A</th><th>Special</th><th></th></tr></thead>
+      <thead><tr><th>Started</th><th>Status</th><th>Reason</th><th>${booking_label || "Bookings"}</th><th>Q&amp;A</th><th>${note_label || "Notes"}</th><th></th></tr></thead>
       <tbody id="calls-body"></tbody>
     </table></div>
   </div>`);
@@ -257,9 +564,9 @@ async function renderActions() {
       <td>${new Date(c.started_at * 1000).toLocaleString()}</td>
       <td><span class="pill ${c.status}">${c.status}</span></td>
       <td class="muted">${c.status_reason || ""}</td>
-      <td>${c.reservation_count}</td>
+      <td>${c.booking_count}</td>
       <td>${c.qa_count}</td>
-      <td>${c.special_request_count}</td>
+      <td>${c.note_count}</td>
       <td><button class="secondary detail-btn" data-id="${c.id}">Details</button></td>
     </tr>`);
     body.appendChild(tr);
@@ -282,7 +589,6 @@ async function renderActions() {
   );
 }
 
-// ----------------------------------------------------------------- Advanced
 async function renderAdvanced() {
   const { config } = await api("/api/config");
   let voices = [];
@@ -338,13 +644,11 @@ async function renderAdvanced() {
   </div>
   <div class="card">
     <h2>Phone number</h2>
-    <p class="hint">Current: ${config.phone_number || "none yet"}. Provisioning a real number costs money on your PyAI account — this app never buys one without you clicking below.</p>
-    <button class="secondary" id="list-numbers">List my PyAI numbers</button>
-    <div id="numbers-list" style="margin-top:10px"></div>
+    <p class="hint">Provisioning a real number costs money on your PyAI account — this app never buys one without you clicking below.</p>
+    <div id="advanced-numbers"></div>
   </div>`);
   app.appendChild(card);
 
-  // Voice picker: real cards with tone/bio from PyAI's catalog, not a bare <select>.
   let selectedVoice = config.voice_id || "";
   const grid = card.querySelector("#voice-grid");
   function renderVoiceGrid() {
@@ -360,7 +664,7 @@ async function renderAdvanced() {
         ${v.preview_url ? `<div style="margin-top:6px"><audio controls src="${v.preview_url}" style="width:100%;height:28px"></audio></div>` : ""}
       </div>`);
       c.addEventListener("click", (e) => {
-        if (e.target.tagName === "AUDIO") return; // let preview playback controls work without selecting
+        if (e.target.tagName === "AUDIO") return;
         selectedVoice = v.voice_id;
         renderVoiceGrid();
       });
@@ -403,37 +707,13 @@ async function renderAdvanced() {
     }
   });
 
-  document.getElementById("list-numbers").addEventListener("click", async () => {
-    const box = document.getElementById("numbers-list");
-    try {
-      const { data } = await api("/api/telephony/numbers");
-      box.innerHTML = (data || [])
-        .map(
-          (n) => `<div class="doc-row"><div>${n.phone_number}</div>
-            <button class="secondary assign-btn" data-id="${n.id}" data-number="${n.phone_number}">Assign to this agent</button></div>`
-        )
-        .join("") || '<p class="muted">No numbers on this account yet — buy one at console.pyai.com or POST /api/telephony/provision.</p>';
-      box.querySelectorAll(".assign-btn").forEach((btn) =>
-        btn.addEventListener("click", async () => {
-          if (!confirm(`Assign ${btn.dataset.number} to this agent? Calls will start ringing into it.`)) return;
-          try {
-            await api("/api/telephony/assign", { method: "POST", body: { number_id: btn.dataset.id, phone_number: btn.dataset.number } });
-            toast("Assigned.");
-            renderAdvanced();
-            refreshHeader();
-          } catch (err) {
-            toast(err.message, "error");
-          }
-        })
-      );
-    } catch (err) {
-      box.innerHTML = `<p class="muted">${err.message}</p>`;
-    }
-  });
+  await renderPhoneNumberBlock(document.getElementById("advanced-numbers"));
 }
 
-// -------------------------------------------------------------------- Router
-const renderers = {
+/* =========================================================================
+   Router
+   ========================================================================= */
+const tabRenderers = {
   templates: renderTemplates,
   behavior: renderBehavior,
   knowledge: renderKnowledge,
@@ -446,8 +726,25 @@ document.getElementById("tabs").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-tab]");
   if (!btn) return;
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b === btn));
-  renderers[btn.dataset.tab]();
+  tabRenderers[btn.dataset.tab]();
+});
+
+function switchMode(mode) {
+  document.querySelectorAll("#modes button").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+  document.getElementById("tabs").style.display = mode === "customize" ? "flex" : "none";
+  if (mode === "quickstart") {
+    renderQuickStart();
+  } else {
+    document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === "templates"));
+    renderTemplates();
+  }
+}
+
+document.getElementById("modes").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-mode]");
+  if (!btn) return;
+  switchMode(btn.dataset.mode);
 });
 
 refreshHeader();
-renderTemplates();
+renderQuickStart();

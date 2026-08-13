@@ -92,6 +92,14 @@ export const knowledgebases = {
     if (title) form.append("title", title);
     return request("POST", `/v1/knowledgebases/${kbId}/documents`, { form });
   },
+  // For businesses with no PDF to upload: point at a page they already have
+  // (Google Business Profile, Facebook Page, Yelp listing) or just paste text.
+  addUrl(kbId, url, title) {
+    return request("POST", `/v1/knowledgebases/${kbId}/documents`, { body: { url, title } });
+  },
+  addText(kbId, text, title) {
+    return request("POST", `/v1/knowledgebases/${kbId}/documents`, { body: { text, title } });
+  },
   getDocument(kbId, docId) {
     return request("GET", `/v1/knowledgebases/${kbId}/documents/${docId}`);
   },
@@ -113,6 +121,9 @@ export const tools = {
   },
   get(toolId) {
     return request("GET", `/v1/tools/${toolId}`);
+  },
+  update(toolId, patch) {
+    return request("POST", `/v1/tools/${toolId}`, { body: patch });
   },
 };
 

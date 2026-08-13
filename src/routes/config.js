@@ -1,5 +1,5 @@
 import { getConfig, updateConfig } from "../db.js";
-import { getTemplate, listTemplates } from "../templates.js";
+import { getTemplate, listTemplates } from "../industries.js";
 import { syncAgent } from "../agentSync.js";
 
 export default async function configRoutes(app) {
@@ -7,23 +7,27 @@ export default async function configRoutes(app) {
 
   app.get("/api/config", async () => ({ config: getConfig() }));
 
-  // Templates screen: pick a cuisine preset. Seeds Behavior + Call Flow fields
-  // (still editable afterward) and pushes to the live agent immediately.
+  // Step 1 of Quick Start (and the Templates screen in Customize): pick a
+  // business type. Seeds Behavior + Call Flow fields (still editable
+  // afterward) and pushes to the live agent immediately. Also accepts the
+  // business name here so a stranger can do step 1 in one screen.
   app.post("/api/config/template", async (req, reply) => {
-    const { template_key } = req.body || {};
+    const { template_key, business_name } = req.body || {};
     const t = getTemplate(template_key);
     updateConfig({
       template_key: t.key,
+      industry_key: t.industryKey,
+      business_name: business_name || getConfig().business_name,
       greeting: t.greeting,
       greeting_variants: t.greetingVariants ? JSON.stringify(t.greetingVariants) : null,
       behavior_role: t.role,
       behavior_personality: t.personality,
       behavior_style: t.style,
-      callflow_reservation_policy: t.reservationPolicy,
-      callflow_menu_policy: t.menuPolicy,
-      callflow_allergy_policy: t.allergyPolicy,
-      callflow_special_policy: t.specialPolicy,
+      callflow_booking_policy: t.bookingPolicy,
+      callflow_qa_intents_json: JSON.stringify(t.qaIntents),
+      callflow_note_policy: t.notePolicy,
       callflow_fallback_policy: t.fallbackPolicy,
+      setup_step: "knowledge",
     });
     const config = await syncAgent();
     return reply.send({ config });
@@ -32,9 +36,9 @@ export default async function configRoutes(app) {
   // Behavior screen: free-text role/personality/style. These ARE the system
   // prompt sent to the live agent, not a preview of it.
   app.post("/api/config/behavior", async (req, reply) => {
-    const { restaurant_name, greeting, greeting_variants, behavior_role, behavior_personality, behavior_style } = req.body || {};
+    const { business_name, greeting, greeting_variants, behavior_role, behavior_personality, behavior_style } = req.body || {};
     updateConfig({
-      restaurant_name,
+      business_name,
       greeting,
       greeting_variants: Array.isArray(greeting_variants) ? JSON.stringify(greeting_variants.filter(Boolean)) : null,
       behavior_role,
@@ -45,24 +49,22 @@ export default async function configRoutes(app) {
     return reply.send({ config });
   });
 
-  // Call Flow screen: the four-intent + fallback routing policy text.
+  // Call Flow screen: booking + dynamic Q&A-intent + note + fallback policy text.
   app.post("/api/config/callflow", async (req, reply) => {
-    const {
-      callflow_reservation_policy,
-      callflow_menu_policy,
-      callflow_allergy_policy,
-      callflow_special_policy,
-      callflow_fallback_policy,
-    } = req.body || {};
+    const { callflow_booking_policy, qa_policies, callflow_note_policy, callflow_fallback_policy } = req.body || {};
+    const config = getConfig();
+    const tpl = getTemplate(config.template_key);
+    // qa_policies: { [intentKey]: policyText } from the UI, merged back onto
+    // the template's intent metadata (key/label/hardRule) so the shape survives.
+    const qaIntents = tpl.qaIntents.map((qa) => ({ ...qa, policy: qa_policies?.[qa.key] ?? qa.policy }));
     updateConfig({
-      callflow_reservation_policy,
-      callflow_menu_policy,
-      callflow_allergy_policy,
-      callflow_special_policy,
+      callflow_booking_policy,
+      callflow_qa_intents_json: JSON.stringify(qaIntents),
+      callflow_note_policy,
       callflow_fallback_policy,
     });
-    const config = await syncAgent();
-    return reply.send({ config });
+    const updated = await syncAgent();
+    return reply.send({ config: updated });
   });
 
   // Advanced screen: only fields the platform genuinely exposes as a
@@ -101,13 +103,14 @@ export default async function configRoutes(app) {
     }
   });
 
-  // "Finish setup": create/update the real PyAI agent, bind KB + tools.
-  // Phone number provisioning/assignment is a separate, explicit step (see
-  // /api/telephony) since it can carry a real cost.
+  // "Finish setup" / step 3 of Quick Start: create/update the real PyAI
+  // agent, bind KB + tools. Phone number provisioning/assignment is a
+  // separate, explicit step (see /api/telephony) since it can carry a real cost.
   app.post("/api/config/finish-setup", async (req, reply) => {
     try {
       const config = await syncAgent();
-      return reply.send({ config });
+      updateConfig({ setup_step: "live" });
+      return reply.send({ config: getConfig() });
     } catch (err) {
       req.log.error(err);
       return reply.code(502).send({ error: String(err.message || err) });

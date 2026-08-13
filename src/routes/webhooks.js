@@ -2,6 +2,7 @@
 // live agent decides to call a tool — this is real engine-native function
 // calling, not something our WebSocket bridge code has to intercept.
 import { handleToolCall } from "../tools.js";
+import { getConfig } from "../db.js";
 
 export default async function webhooksRoutes(app) {
   app.post("/webhooks/tools/:name", async (req, reply) => {
@@ -16,7 +17,7 @@ export default async function webhooksRoutes(app) {
     req.log.info({ tool: name, call_id: body.call_id, args: body.arguments }, "tool call");
 
     try {
-      const result = handleToolCall(name, body);
+      const result = handleToolCall(name, body, getConfig());
       return reply.send(result);
     } catch (err) {
       req.log.error(err, "tool handler failed");

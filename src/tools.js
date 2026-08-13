@@ -1,79 +1,81 @@
-// The four real tools the live agent calls. Each is registered with PyAI as a
-// server-execution webhook tool (the PyAI engine POSTs directly to our
-// /webhooks/tools/:name route when the model decides to call it — no
-// client-loop wiring on our WebSocket bridge needed).
+// The four real tools the live agent calls. Generic across industries — the
+// shapes are fixed (log_booking / log_qa_answer / log_note / escalate_to_human),
+// but each is REGISTERED with PyAI using the active business's resolved
+// template (src/industries.js) for field names/labels and the QA intent enum,
+// so a dental office's log_booking asks for "reason for visit" while a
+// restaurant's asks for "party size" — same tool, different shape.
 //
-// These map 1:1 onto the brief's four intents + fallback, and their firing
-// (or not firing) is exactly how we derive the harness exit-state:
-//   escalate_to_human fired            -> escalated  (wins over everything)
-//   log_reservation /
-//   log_menu_or_allergy_answer /
-//   log_special_request fired          -> completed
-//   call ended, none of the above fired -> partial
+// Each is a server-execution webhook tool: the PyAI engine POSTs directly to
+// our /webhooks/tools/:name route when the model decides to call it — no
+// client-loop wiring on our WebSocket bridge needed.
+//
+// Firing (or not firing) one of these is exactly how we derive the harness
+// exit-state:
+//   escalate_to_human fired                    -> escalated  (wins over everything)
+//   log_booking / log_qa_answer / log_note fired -> completed
+//   call ended, none of the above fired          -> partial
 import { db } from "./db.js";
 import { tools as pyaiTools } from "./pyai.js";
+import { getTemplate } from "./industries.js";
 
-export const TOOL_DEFS = [
-  {
-    name: "log_reservation",
-    description:
-      "Log a confirmed table reservation after reading the details back to the caller and getting their confirmation.",
-    side_effect: "action",
-    input_schema: {
-      type: "object",
-      required: ["name", "party_size", "date", "time"],
-      properties: {
-        name: { type: "string", description: "Name the reservation is under." },
-        party_size: { type: "integer", description: "Number of guests." },
-        date: { type: "string", description: "Reservation date, as stated by the caller (e.g. 'Friday, August 14')." },
-        time: { type: "string", description: "Reservation time, as stated by the caller (e.g. '7:30 PM')." },
-        special_request: { type: "string", description: "Optional note, e.g. a birthday or accessibility need." },
+/** Build the 4 tool definitions for the business's active template. */
+export function buildToolDefs(config) {
+  const tpl = getTemplate(config.template_key);
+  return [
+    {
+      name: "log_booking",
+      description: `Log a confirmed ${tpl.bookingLabel.toLowerCase()} after reading the details back to the caller and getting their confirmation.`,
+      side_effect: "action",
+      input_schema: {
+        type: "object",
+        required: ["name", "date", "time", tpl.bookingDetailField.key],
+        properties: {
+          name: { type: "string", description: `Name the ${tpl.bookingLabel.toLowerCase()} is under.` },
+          date: { type: "string", description: "Date, as stated by the caller (e.g. 'Friday, August 14')." },
+          time: { type: "string", description: "Time, as stated by the caller (e.g. '7:30 PM')." },
+          [tpl.bookingDetailField.key]: { type: tpl.bookingDetailField.type === "integer" ? "integer" : "string", description: tpl.bookingDetailField.label },
+        },
       },
     },
-  },
-  {
-    name: "log_menu_or_allergy_answer",
-    description:
-      "Log a menu or allergy question you just answered (or told the caller you couldn't answer), including whether it was grounded in the restaurant's knowledge base.",
-    side_effect: "action",
-    input_schema: {
-      type: "object",
-      required: ["question", "answer", "intent", "grounded"],
-      properties: {
-        question: { type: "string" },
-        answer: { type: "string" },
-        intent: { type: "string", enum: ["menu", "allergy"] },
-        grounded: { type: "boolean", description: "True only if the answer came from the knowledge base." },
-        source_excerpt: { type: "string", description: "The exact excerpt from the knowledge base you based the answer on, if any." },
+    {
+      name: "log_qa_answer",
+      description: `Log a question you just answered (or told the caller you couldn't answer), including whether it was grounded in the business's knowledge base.`,
+      side_effect: "action",
+      input_schema: {
+        type: "object",
+        required: ["question", "answer", "intent", "grounded"],
+        properties: {
+          question: { type: "string" },
+          answer: { type: "string" },
+          intent: { type: "string", enum: tpl.qaIntents.map((q) => q.key), description: tpl.qaIntents.map((q) => `${q.key} = ${q.label}`).join("; ") },
+          grounded: { type: "boolean", description: "True only if the answer came from the knowledge base." },
+          source_excerpt: { type: "string", description: "The exact excerpt from the knowledge base you based the answer on, if any." },
+        },
       },
     },
-  },
-  {
-    name: "log_special_request",
-    description: "Log a special occasion note (birthday, proposal, anniversary, etc.) mentioned by the caller.",
-    side_effect: "action",
-    input_schema: {
-      type: "object",
-      required: ["note"],
-      properties: {
-        note: { type: "string" },
+    {
+      name: "log_note",
+      description: `Log a ${tpl.noteLabel.toLowerCase()} mentioned by the caller.`,
+      side_effect: "action",
+      input_schema: {
+        type: "object",
+        required: ["note"],
+        properties: { note: { type: "string" } },
       },
     },
-  },
-  {
-    name: "escalate_to_human",
-    description:
-      "Call this whenever the caller's request is outside reservations, menu questions, allergy questions, or special-occasion notes. Tell the caller a team member will call them back, then call this tool with the reason.",
-    side_effect: "action",
-    input_schema: {
-      type: "object",
-      required: ["reason"],
-      properties: {
-        reason: { type: "string" },
+    {
+      name: "escalate_to_human",
+      description:
+        "Call this whenever the caller's request is outside bookings, the question types you're grounded to answer, or notes. Tell the caller a team member will call them back, then call this tool with the reason.",
+      side_effect: "action",
+      input_schema: {
+        type: "object",
+        required: ["reason"],
+        properties: { reason: { type: "string" } },
       },
     },
-  },
-];
+  ];
+}
 
 function webhookBase() {
   const host = process.env.PUBLIC_HOST;
@@ -81,24 +83,34 @@ function webhookBase() {
   return `https://${host}`;
 }
 
-/** Idempotently register (or reuse) the 4 tools with PyAI. Returns { name -> tool_id }. */
-export async function ensureToolsRegistered() {
+/**
+ * Idempotently register (or reuse) the 4 tools with PyAI for the business's
+ * CURRENT template. Re-registers (new tool_id, old one left orphaned but
+ * disabled implicitly by no longer being bound) if the template's shape
+ * changed since last registration — cheap enough for a single-tenant app.
+ */
+export async function ensureToolsRegistered(config) {
   const secret = process.env.TOOL_WEBHOOK_SECRET;
   if (!secret) throw new Error("TOOL_WEBHOOK_SECRET must be set before registering tools.");
 
+  const defs = buildToolDefs(config);
   const ids = {};
   const remote = await pyaiTools.list().catch(() => ({ data: [] }));
   const byName = new Map((remote.data || []).map((t) => [t.name, t]));
 
-  for (const def of TOOL_DEFS) {
+  for (const def of defs) {
     const cached = db.prepare(`SELECT tool_id FROM pyai_tools WHERE name = ?`).get(def.name);
-    if (cached?.tool_id) {
-      ids[def.name] = cached.tool_id;
-      continue;
-    }
-    const existing = byName.get(def.name);
+    const existing = cached?.tool_id ? { id: cached.tool_id } : byName.get(def.name);
+
     if (existing) {
       ids[def.name] = existing.id;
+      // A business can switch templates (restaurant -> dental, say) after
+      // tools were already registered. Push the current shape every time
+      // rather than trusting a stale cached schema — cheap, and correct.
+      await pyaiTools.update?.(existing.id, {
+        description: def.description,
+        input_schema: def.input_schema,
+      }).catch(() => {}); // best-effort; a create-only PyAI account without update perms shouldn't block setup
     } else {
       const created = await pyaiTools.create({
         name: def.name,
@@ -141,33 +153,31 @@ function markCallStatus(callId, status, reason) {
 
 /** The actual handlers, keyed by tool name. Each returns the JSON PyAI forwards to the model. */
 export const TOOL_HANDLERS = {
-  log_reservation(callId, agentId, args) {
+  log_booking(callId, agentId, args, config) {
     ensureCall(callId, agentId);
-    const { name, party_size, date, time, special_request } = args;
+    const tpl = getTemplate(config.template_key);
+    const { name, date, time } = args;
+    const detailValue = args[tpl.bookingDetailField.key];
     const info = db
-      .prepare(
-        `INSERT INTO reservations (call_id, name, party_size, reservation_date, reservation_time, special_request) VALUES (?, ?, ?, ?, ?, ?)`
-      )
-      .run(callId, name, party_size, date, time, special_request || null);
-    markCallStatus(callId, "completed", `reservation #${info.lastInsertRowid} booked`);
-    return { ok: true, reservation_id: info.lastInsertRowid };
+      .prepare(`INSERT INTO bookings (call_id, name, booking_date, booking_time, detail_label, detail_value) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(callId, name, date, time, tpl.bookingDetailField.label, detailValue != null ? String(detailValue) : null);
+    markCallStatus(callId, "completed", `${tpl.bookingLabel.toLowerCase()} #${info.lastInsertRowid} booked`);
+    return { ok: true, booking_id: info.lastInsertRowid };
   },
-  log_menu_or_allergy_answer(callId, agentId, args) {
+  log_qa_answer(callId, agentId, args) {
     ensureCall(callId, agentId);
     const { question, answer, intent, grounded, source_excerpt } = args;
     const info = db
-      .prepare(
-        `INSERT INTO qa_answers (call_id, question, answer, intent, grounded, source_excerpt) VALUES (?, ?, ?, ?, ?, ?)`
-      )
+      .prepare(`INSERT INTO qa_answers (call_id, question, answer, intent, grounded, source_excerpt) VALUES (?, ?, ?, ?, ?, ?)`)
       .run(callId, question, answer, intent, grounded ? 1 : 0, source_excerpt || null);
-    markCallStatus(callId, "completed", `${intent} question answered (grounded=${!!grounded})`);
+    markCallStatus(callId, "completed", `"${intent}" question answered (grounded=${!!grounded})`);
     return { ok: true, qa_id: info.lastInsertRowid };
   },
-  log_special_request(callId, agentId, args) {
+  log_note(callId, agentId, args) {
     ensureCall(callId, agentId);
-    const info = db.prepare(`INSERT INTO special_requests (call_id, note) VALUES (?, ?)`).run(callId, args.note);
-    markCallStatus(callId, "completed", "special request logged");
-    return { ok: true, special_request_id: info.lastInsertRowid };
+    const info = db.prepare(`INSERT INTO notes (call_id, note) VALUES (?, ?)`).run(callId, args.note);
+    markCallStatus(callId, "completed", "note logged");
+    return { ok: true, note_id: info.lastInsertRowid };
   },
   escalate_to_human(callId, agentId, args) {
     ensureCall(callId, agentId);
@@ -177,11 +187,11 @@ export const TOOL_HANDLERS = {
 };
 
 /** Called by the webhook route. Records the invocation and runs the handler. */
-export function handleToolCall(toolName, { call_id, agent_id, arguments: args }) {
+export function handleToolCall(toolName, { call_id, agent_id, arguments: args }, config) {
   recordInvocation(call_id, toolName, args, null);
   const handler = TOOL_HANDLERS[toolName];
   if (!handler) return { error: `unknown tool ${toolName}` };
-  const result = handler(call_id, agent_id, args || {});
+  const result = handler(call_id, agent_id, args || {}, config);
   recordInvocation(call_id, `${toolName}:result`, args, result);
   return result;
 }
