@@ -10,6 +10,23 @@ Nothing here is a mockup. Every screen is wired to PyAI's real Agents,
 Knowledgebases, and Tools APIs — editing a field and saving actually changes
 what the live agent says on the next call.
 
+## The needle-mover
+
+Everyone can wire an LLM to a phone number now — that's not the differentiator
+anymore. The thing almost nobody building on top of a generic voice-agent
+platform bothers to get right is refusing to guess about someone's allergy.
+
+Open Receptionist's actual bet: **every menu or allergy answer either traces to
+the uploaded PDF, or the agent says it doesn't know — never in between, and
+it's logged so you can check.** `log_menu_or_allergy_answer` (`src/tools.js`)
+captures a `grounded` flag and the exact `source_excerpt` on every single
+answer, visible on the Actions screen. A generic Vapi/Retell-style receptionist
+will confidently answer "no nuts" when it's actually unsure — that's not a
+hypothetical, it's the default failure mode of an ungrounded LLM asked a
+factual question it wants to be helpful about. This is the one feature the
+whole build is willing to spend effort on that a demo receptionist wouldn't
+bother with.
+
 ## Architecture in one paragraph
 
 There's exactly one place "the agent" lives: a persistent **PyAI Agent**
