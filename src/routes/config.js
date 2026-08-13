@@ -15,6 +15,7 @@ export default async function configRoutes(app) {
     updateConfig({
       template_key: t.key,
       greeting: t.greeting,
+      greeting_variants: t.greetingVariants ? JSON.stringify(t.greetingVariants) : null,
       behavior_role: t.role,
       behavior_personality: t.personality,
       behavior_style: t.style,
@@ -31,8 +32,15 @@ export default async function configRoutes(app) {
   // Behavior screen: free-text role/personality/style. These ARE the system
   // prompt sent to the live agent, not a preview of it.
   app.post("/api/config/behavior", async (req, reply) => {
-    const { restaurant_name, greeting, behavior_role, behavior_personality, behavior_style } = req.body || {};
-    updateConfig({ restaurant_name, greeting, behavior_role, behavior_personality, behavior_style });
+    const { restaurant_name, greeting, greeting_variants, behavior_role, behavior_personality, behavior_style } = req.body || {};
+    updateConfig({
+      restaurant_name,
+      greeting,
+      greeting_variants: Array.isArray(greeting_variants) ? JSON.stringify(greeting_variants.filter(Boolean)) : null,
+      behavior_role,
+      behavior_personality,
+      behavior_style,
+    });
     const config = await syncAgent();
     return reply.send({ config });
   });
@@ -60,11 +68,12 @@ export default async function configRoutes(app) {
   // Advanced screen: only fields the platform genuinely exposes as a
   // real, working switch (see AgentConfig on PyAI). Nothing hand-rolled.
   app.post("/api/config/advanced", async (req, reply) => {
-    const { voice_id, language, barge_sensitivity, idle_check_in, consent_line, recordings_enabled } = req.body || {};
+    const { voice_id, language, barge_sensitivity, ack_mode, idle_check_in, consent_line, recordings_enabled } = req.body || {};
     updateConfig({
       voice_id,
       language,
       barge_sensitivity,
+      ack_mode,
       idle_check_in,
       consent_line,
       recordings_enabled: recordings_enabled ? 1 : 0,
@@ -77,7 +86,16 @@ export default async function configRoutes(app) {
     const { voices } = await import("../pyai.js");
     try {
       const list = await voices.list();
-      return reply.send(list);
+      // Surface receptionist-fit voices first — real metadata PyAI already
+      // tags each voice with, not a guess on our part.
+      const data = (list.data || [])
+        .filter((v) => v.language === "en")
+        .sort((a, b) => {
+          const aFit = a.use_cases?.includes("receptionist / front desk") ? 0 : 1;
+          const bFit = b.use_cases?.includes("receptionist / front desk") ? 0 : 1;
+          return aFit - bFit || a.name.localeCompare(b.name);
+        });
+      return reply.send({ ...list, data });
     } catch (err) {
       return reply.code(502).send({ error: String(err.message || err) });
     }

@@ -4,16 +4,30 @@
 import { getConfig, updateConfig, db } from "./db.js";
 import { agents } from "./pyai.js";
 import { buildPersonaPrompt, buildGreeting } from "./promptBuilder.js";
+import { fillPlaceholders } from "./templates.js";
 import { ensureToolsRegistered } from "./tools.js";
+
+function parseGreetingVariants(json, restaurantName) {
+  if (!json) return null;
+  try {
+    const arr = JSON.parse(json);
+    if (!Array.isArray(arr) || arr.length === 0) return null;
+    return arr.map((t) => fillPlaceholders(t, restaurantName));
+  } catch {
+    return null;
+  }
+}
 
 function agentPayload(config) {
   return {
     name: config.restaurant_name || "Open Receptionist",
     persona_system_prompt: buildPersonaPrompt(config),
     greeting: buildGreeting(config),
+    greeting_variants: parseGreetingVariants(config.greeting_variants, config.restaurant_name),
     voice_id: config.voice_id || null,
     language: config.language || "en",
     barge_sensitivity: config.barge_sensitivity || "normal",
+    ack_mode: config.ack_mode || "auto",
     idle_check_in: config.idle_check_in || "auto",
     consent_line: config.consent_line || null,
     recordings_enabled: !!config.recordings_enabled,

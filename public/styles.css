@@ -97,6 +97,9 @@ button.secondary {
 button.danger { border-color: var(--bad); color: var(--bad); }
 button:disabled { opacity: 0.5; cursor: default; }
 .template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.voice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin: 10px 0 4px; }
+.voice-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px; cursor: pointer; font-size: 13px; }
+.voice-card.selected { border-color: var(--accent); background: var(--accent-dim); }
 .template-card {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -131,3 +134,22 @@ th { color: var(--muted); font-weight: 500; }
 .call-detail { margin-top: 8px; padding: 10px; background: #10121a; border-radius: 6px; font-size: 13px; }
 .transcript-line { margin: 4px 0; }
 .transcript-line .role { color: var(--accent); font-weight: 600; }
+.table-scroll { overflow-x: auto; }
+
+/* Mobile: the builder is a real phone-friendly web app, not just a shrunk desktop page. */
+@media (max-width: 640px) {
+  header { padding: 12px 16px; flex-wrap: wrap; gap: 6px; }
+  nav { padding: 0 8px; }
+  nav button { padding: 10px 12px; font-size: 13px; }
+  main { padding: 12px; }
+  .card { padding: 14px; border-radius: 8px; }
+  .row { flex-direction: column; gap: 0; }
+  .template-grid, .voice-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  table { font-size: 12px; }
+  th, td { padding: 6px 4px; }
+  button.primary, button.secondary { padding: 11px 16px; } /* bigger tap targets */
+  .toast { left: 12px; right: 12px; bottom: 12px; }
+}
+@media (max-width: 420px) {
+  .template-grid, .voice-grid { grid-template-columns: 1fr; }
+}

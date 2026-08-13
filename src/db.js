@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS restaurant_config (
   agent_id TEXT,               -- PyAI agent_id, once created
   kb_id TEXT,                  -- PyAI knowledgebase id, once created
   greeting TEXT,
+  greeting_variants TEXT,   -- JSON array of alternate opening lines; PyAI rotates them per call
+  ack_mode TEXT NOT NULL DEFAULT 'auto',  -- conversational acknowledgment ("mm-hmm", "got it") mode
   behavior_role TEXT,
   behavior_personality TEXT,
   behavior_style TEXT,
@@ -120,6 +122,19 @@ CREATE TABLE IF NOT EXISTS tool_invocations (
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 `);
+
+// Lightweight migration for columns added after the table already existed on
+// disk (CREATE TABLE IF NOT EXISTS doesn't retrofit new columns).
+for (const stmt of [
+  `ALTER TABLE restaurant_config ADD COLUMN greeting_variants TEXT`,
+  `ALTER TABLE restaurant_config ADD COLUMN ack_mode TEXT NOT NULL DEFAULT 'auto'`,
+]) {
+  try {
+    db.exec(stmt);
+  } catch (err) {
+    if (!/duplicate column/i.test(err.message)) throw err;
+  }
+}
 
 // Ensure the singleton config row exists.
 db.prepare(`INSERT OR IGNORE INTO restaurant_config (id) VALUES (1)`).run();

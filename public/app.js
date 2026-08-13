@@ -83,8 +83,10 @@ async function renderBehavior() {
       <p class="hint">These fields ARE the system prompt sent to the live agent. Save to push the change to the next call.</p>
       <label>Restaurant name</label>
       <input type="text" id="restaurant_name" value="${config.restaurant_name || ""}" />
-      <label>Greeting (spoken at the start of every call)</label>
-      <input type="text" id="greeting" value="${config.greeting || ""}" />
+      <label>Greeting variants</label>
+      <p class="hint" style="margin-top:-2px">A real receptionist doesn't say the exact same line every call. Add a few — PyAI rotates between them per call. The first one also serves as the fallback.</p>
+      <div id="greeting-variants"></div>
+      <button class="secondary" id="add-greeting" style="margin-top:6px">+ Add another opening line</button>
       <label>Role</label>
       <textarea id="behavior_role">${config.behavior_role || ""}</textarea>
       <label>Personality</label>
@@ -94,13 +96,47 @@ async function renderBehavior() {
       <div style="margin-top:14px"><button class="primary" id="save-behavior">Save</button></div>
     </div>`)
   );
+  // Greeting variants: render one input per existing variant (seeded from the
+  // template, or a single blank if none yet), each removable.
+  const variantsBox = document.getElementById("greeting-variants");
+  let variants = [];
+  try {
+    variants = config.greeting_variants ? JSON.parse(config.greeting_variants) : config.greeting ? [config.greeting] : [""];
+  } catch {
+    variants = config.greeting ? [config.greeting] : [""];
+  }
+  function renderVariantRows() {
+    variantsBox.innerHTML = "";
+    variants.forEach((v, i) => {
+      const row = el(`<div style="display:flex;gap:6px;margin-bottom:6px">
+        <input type="text" class="greeting-variant" value="${(v || "").replace(/"/g, "&quot;")}" style="flex:1" />
+        ${variants.length > 1 ? `<button class="secondary remove-variant" data-i="${i}">✕</button>` : ""}
+      </div>`);
+      row.querySelector(".remove-variant")?.addEventListener("click", () => {
+        variants.splice(i, 1);
+        renderVariantRows();
+      });
+      variantsBox.appendChild(row);
+    });
+  }
+  renderVariantRows();
+  document.getElementById("add-greeting").addEventListener("click", () => {
+    if (variants.length >= 15) return toast("PyAI supports up to 15 greeting variants.", "error");
+    variants.push("");
+    renderVariantRows();
+  });
+
   document.getElementById("save-behavior").addEventListener("click", async () => {
+    const finalVariants = Array.from(variantsBox.querySelectorAll(".greeting-variant"))
+      .map((i) => i.value.trim())
+      .filter(Boolean);
     try {
       await api("/api/config/behavior", {
         method: "POST",
         body: {
           restaurant_name: document.getElementById("restaurant_name").value,
-          greeting: document.getElementById("greeting").value,
+          greeting: finalVariants[0] || "",
+          greeting_variants: finalVariants,
           behavior_role: document.getElementById("behavior_role").value,
           behavior_personality: document.getElementById("behavior_personality").value,
           behavior_style: document.getElementById("behavior_style").value,
@@ -206,10 +242,10 @@ async function renderActions() {
   const card = el(`<div class="card">
     <h2>Actions — call log</h2>
     <p class="hint">Every row is a real call. Status is derived from which tool the live agent actually called (or didn't) before the call ended.</p>
-    <table>
+    <div class="table-scroll"><table>
       <thead><tr><th>Started</th><th>Status</th><th>Reason</th><th>Reservations</th><th>Q&amp;A</th><th>Special</th><th></th></tr></thead>
       <tbody id="calls-body"></tbody>
-    </table>
+    </table></div>
   </div>`);
   app.appendChild(card);
   const body = card.querySelector("#calls-body");
@@ -257,14 +293,9 @@ async function renderAdvanced() {
   const card = el(`<div class="card">
     <h2>Advanced</h2>
     <p class="hint">Only real, working switches the platform exposes — nothing hand-rolled.</p>
+    <label>Voice — sorted by fit for a phone receptionist, real bios from PyAI's voice catalog</label>
+    <div class="voice-grid" id="voice-grid"></div>
     <div class="row">
-      <div>
-        <label>Voice</label>
-        <select id="voice_id">
-          <option value="">(agent default)</option>
-          ${voices.map((v) => `<option value="${v.voice_id}" ${v.voice_id === config.voice_id ? "selected" : ""}>${v.name} — ${v.region || ""}</option>`).join("")}
-        </select>
-      </div>
       <div>
         <label>Language</label>
         <select id="language">
@@ -289,6 +320,11 @@ async function renderAdvanced() {
         </select>
       </div>
     </div>
+    <label>Conversational acknowledgments</label>
+    <select id="ack_mode">
+      ${["auto", "minimal", "off"].map((v) => `<option value="${v}" ${v === config.ack_mode ? "selected" : ""}>${v}</option>`).join("")}
+    </select>
+    <p class="hint" style="margin-top:4px">Small backchannel sounds ("mm-hmm", "got it") while listening — this is what stops the agent feeling like a form. "auto" is the humane default.</p>
     <label>Consent line (recording disclosure, optional)</label>
     <input type="text" id="consent_line" value="${config.consent_line || ""}" />
     <label><input type="checkbox" id="recordings_enabled" ${config.recordings_enabled ? "checked" : ""} style="width:auto;margin-right:6px" />Recordings enabled</label>
@@ -308,14 +344,40 @@ async function renderAdvanced() {
   </div>`);
   app.appendChild(card);
 
+  // Voice picker: real cards with tone/bio from PyAI's catalog, not a bare <select>.
+  let selectedVoice = config.voice_id || "";
+  const grid = card.querySelector("#voice-grid");
+  function renderVoiceGrid() {
+    grid.innerHTML = "";
+    grid.appendChild(
+      el(`<div class="voice-card ${selectedVoice === "" ? "selected" : ""}" data-voice=""><strong>Agent default</strong><div class="muted">No preference — PyAI picks.</div></div>`)
+    );
+    voices.slice(0, 12).forEach((v) => {
+      const c = el(`<div class="voice-card ${selectedVoice === v.voice_id ? "selected" : ""}" data-voice="${v.voice_id}">
+        <strong>${v.name}</strong> <span class="muted">${v.accent || v.region || ""}</span>
+        <div class="muted">${v.tone || ""}</div>
+        ${v.use_cases?.includes("receptionist / front desk") ? '<span class="pill completed" style="margin-top:4px">receptionist fit</span>' : ""}
+        ${v.preview_url ? `<div style="margin-top:6px"><audio controls src="${v.preview_url}" style="width:100%;height:28px"></audio></div>` : ""}
+      </div>`);
+      c.addEventListener("click", (e) => {
+        if (e.target.tagName === "AUDIO") return; // let preview playback controls work without selecting
+        selectedVoice = v.voice_id;
+        renderVoiceGrid();
+      });
+      grid.appendChild(c);
+    });
+  }
+  renderVoiceGrid();
+
   document.getElementById("save-advanced").addEventListener("click", async () => {
     try {
       await api("/api/config/advanced", {
         method: "POST",
         body: {
-          voice_id: document.getElementById("voice_id").value || null,
+          voice_id: selectedVoice || null,
           language: document.getElementById("language").value,
           barge_sensitivity: document.getElementById("barge_sensitivity").value,
+          ack_mode: document.getElementById("ack_mode").value,
           idle_check_in: document.getElementById("idle_check_in").value,
           consent_line: document.getElementById("consent_line").value,
           recordings_enabled: document.getElementById("recordings_enabled").checked,

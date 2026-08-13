@@ -21,6 +21,11 @@ export const TEMPLATES = {
     fallbackPolicy:
       "If the request is outside reservations, menu questions, allergy questions, or special occasion notes, don't improvise. Say a team member will call back, capture the reason, and end the call gracefully.",
     greeting: "Thanks for calling {{restaurant_name}}! How can I help you today?",
+    greetingVariants: [
+      "Thanks for calling {{restaurant_name}}! How can I help you today?",
+      "Hi there, {{restaurant_name}}, how can I help?",
+      "Good evening, thanks for calling {{restaurant_name}} — what can I do for you?",
+    ],
   },
   bakery: {
     key: "bakery",
@@ -39,6 +44,10 @@ export const TEMPLATES = {
     fallbackPolicy:
       "Outside custom orders, menu questions, allergy questions, or occasion notes: say a team member will call back, capture the reason, and end the call gracefully.",
     greeting: "Thanks for calling {{restaurant_name}}! What can I get started for you?",
+    greetingVariants: [
+      "Thanks for calling {{restaurant_name}}! What can I get started for you?",
+      "Hi, {{restaurant_name}} — what can I get for you today?",
+    ],
   },
   cafe: {
     key: "cafe",
@@ -57,6 +66,10 @@ export const TEMPLATES = {
     fallbackPolicy:
       "Outside those four cases: say a team member will call back, capture the reason, and end the call gracefully.",
     greeting: "Thanks for calling {{restaurant_name}}! How can I help?",
+    greetingVariants: [
+      "Thanks for calling {{restaurant_name}}! How can I help?",
+      "Hey there, {{restaurant_name}} — what can I help with?",
+    ],
   },
 };
 
