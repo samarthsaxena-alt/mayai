@@ -1,0 +1,23 @@
+{
+  "name": "open-receptionist",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Free, open-source AI phone receptionist for independent restaurants, built on PyAI Omni.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file=.env server.js",
+    "dev": "node --env-file=.env --watch server.js",
+    "spike": "node --env-file=.env scripts/omni-spike.js"
+  },
+  "dependencies": {
+    "@fastify/multipart": "^9.0.1",
+    "@fastify/static": "^8.0.3",
+    "@fastify/websocket": "^11.0.1",
+    "@pyai/twilio": "^0.3.1",
+    "better-sqlite3": "^11.5.0",
+    "fastify": "^5.8.5"
+  }
+}

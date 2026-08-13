@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Open Receptionist</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header>
+  <h1>Open <span>Receptionist</span></h1>
+  <div id="header-status" class="muted"></div>
+</header>
+<nav id="tabs">
+  <button data-tab="templates" class="active">Templates</button>
+  <button data-tab="behavior">Behavior</button>
+  <button data-tab="knowledge">Knowledge</button>
+  <button data-tab="callflow">Call Flow</button>
+  <button data-tab="actions">Actions</button>
+  <button data-tab="advanced">Advanced</button>
+</nav>
+<main id="app"></main>
+<div id="toast" style="display:none"></div>
+<script src="/app.js"></script>
+</body>
+</html>
