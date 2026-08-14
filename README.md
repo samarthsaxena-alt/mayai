@@ -42,8 +42,12 @@ A generic voice receptionist will confidently answer "no nuts" when it is actual
 unsure. That is not a hypothetical; it is the default failure mode of an ungrounded
 model asked a factual question it wants to be helpful about.
 
-So every answer carries its receipt: `log_qa_answer` records a `grounded` flag and
-the exact `source_excerpt` behind each reply, visible per-call in the Actions log.
+So every answer is instrumented to carry its receipt: `log_qa_answer` records a
+`grounded` flag and the `source_excerpt` behind each reply into the audit trail.
+
+Two honest caveats, both tracked in [docs/STATUS.md](docs/STATUS.md): the recorded
+excerpt is **not yet surfaced anywhere in the UI**, and no live call has yet produced
+a grounded answer — so today this is instrumented and designed, not demonstrated.
 
 **Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#the-grounding-gate-described-accurately)
 for what actually enforces this.** Omni is a fused speech-to-speech model, so there
