@@ -8,25 +8,34 @@
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-<header>
-  <h1><img src="/mayai-logo.png" alt="MayAI" style="height:26px;vertical-align:-6px" /></h1>
-  <div id="header-status" class="muted"></div>
-</header>
-<nav id="modes">
-  <button data-mode="quickstart" class="active">Quick Start</button>
-  <button data-mode="customize">Customize</button>
-</nav>
-<nav id="tabs" style="display:none">
-  <button data-tab="templates" class="active">Templates</button>
-  <button data-tab="behavior">Behavior</button>
-  <button data-tab="knowledge">Knowledge</button>
-  <button data-tab="callflow">Call Flow</button>
-  <button data-tab="actions">Actions</button>
-  <button data-tab="analytics">Analytics</button>
-  <button data-tab="advanced">Advanced</button>
-</nav>
-<main id="app"></main>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="sidebar-logo"><img src="/mayai-logo.png" alt="MayAI" /></div>
+    <nav id="sidenav">
+      <button data-mode="quickstart" data-tab="" class="active"><span class="si">🚀</span>Quick Start</button>
+      <div class="sidenav-section">Customize</div>
+      <button data-mode="customize" data-tab="templates"><span class="si">🗂️</span>Templates</button>
+      <button data-mode="customize" data-tab="behavior"><span class="si">💬</span>Behavior</button>
+      <button data-mode="customize" data-tab="knowledge"><span class="si">📚</span>Knowledge</button>
+      <button data-mode="customize" data-tab="callflow"><span class="si">🔀</span>Call Flow</button>
+      <button data-mode="customize" data-tab="actions"><span class="si">📋</span>Actions</button>
+      <button data-mode="customize" data-tab="analytics"><span class="si">📊</span>Analytics</button>
+      <button data-mode="customize" data-tab="advanced"><span class="si">⚙️</span>Advanced</button>
+    </nav>
+  </aside>
+  <div class="main-area">
+    <header class="topbar">
+      <h1 id="page-title">Quick Start</h1>
+      <div class="topbar-right">
+        <div id="header-status" class="status-chip"></div>
+        <div class="avatar-circle">🙂</div>
+      </div>
+    </header>
+    <main id="app"></main>
+  </div>
+</div>
 <div id="toast" style="display:none"></div>
+<script src="/webcall.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

@@ -2,6 +2,18 @@ const app = document.getElementById("app");
 const toastEl = document.getElementById("toast");
 const headerStatus = document.getElementById("header-status");
 
+// When this page is reached via the marketing site's "?business_key=..."
+// redirect, every API call needs to operate on THAT business's own
+// persistent row (src/db.js: businesses table) instead of this builder's
+// original singleton config - otherwise the page silently falls back to the
+// singleton and shows whatever step/data IT happens to be in (the original
+// bug: landing here always showed the singleton's stale wizard step,
+// completely ignoring the business_key in the URL). Threaded centrally here
+// in the one shared api() helper rather than at every call site - routes
+// that don't yet accept business_key (Customize/Actions/Analytics tabs)
+// just ignore the extra field/param, which is the correct fallback.
+const BUSINESS_KEY = new URLSearchParams(location.search).get("business_key");
+
 function toast(msg, type = "ok") {
   toastEl.textContent = msg;
   toastEl.className = `toast ${type}`;
@@ -11,10 +23,20 @@ function toast(msg, type = "ok") {
 }
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
+  let finalPath = path;
+  let finalBody = opts.body;
+  if (BUSINESS_KEY) {
+    if (finalBody && !(finalBody instanceof FormData) && typeof finalBody === "object") {
+      finalBody = { ...finalBody, business_key: BUSINESS_KEY };
+    } else if (!finalBody || finalBody instanceof FormData) {
+      const sep = finalPath.includes("?") ? "&" : "?";
+      finalPath = `${finalPath}${sep}business_key=${encodeURIComponent(BUSINESS_KEY)}`;
+    }
+  }
+  const res = await fetch(finalPath, {
     ...opts,
-    headers: opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json", ...opts.headers } : opts.headers,
-    body: opts.body && !(opts.body instanceof FormData) ? JSON.stringify(opts.body) : opts.body,
+    headers: finalBody && !(finalBody instanceof FormData) ? { "Content-Type": "application/json", ...opts.headers } : opts.headers,
+    body: finalBody && !(finalBody instanceof FormData) ? JSON.stringify(finalBody) : finalBody,
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { data });
@@ -30,11 +52,12 @@ function el(html) {
 async function refreshHeader() {
   try {
     const { config } = await api("/api/config");
+    const name = config.ai_name || "Your AI";
     headerStatus.textContent = config.phone_number
-      ? `Live on ${config.phone_number}`
+      ? `${name} is on the clock — ${config.phone_number}`
       : config.agent_id
-      ? "Agent created — no phone number yet"
-      : "Not set up yet";
+      ? `${name} is hired — no phone number yet`
+      : "Not hired yet";
   } catch {
     headerStatus.textContent = "";
   }
@@ -47,8 +70,14 @@ async function refreshHeader() {
    and want to tweak it.
    ========================================================================= */
 
+// The "meet your AI" hiring frame: Quick Start isn't "configure a bot," it's
+// "hire and onboard someone" — meet the candidate, show them around on their
+// first day, then watch their first shift. Same 3 screens/APIs underneath;
+// only the words change, but the words are the point.
+const SUGGESTED_AI_NAMES = ["Sam", "Alex", "Jamie", "Riley", "Morgan", "Casey"];
+
 function wizardShell(stepIndex, bodyHtml) {
-  const steps = ["What kind of business?", "What do you offer?", "Go live"];
+  const steps = ["Meet your AI", "Their first day", "First shift"];
   app.innerHTML = "";
   app.appendChild(
     el(`<div>
@@ -75,16 +104,22 @@ async function renderWizardStep1(config) {
 
   wizardShell(
     0,
-    `<div class="big-question">What kind of business is this?</div>
-     <p class="hint">Pick the closest match — everything below is fully editable later, this just gets you a sensible starting point instead of a blank page.</p>
-     <label>Business name</label>
+    `<div class="big-question">Meet your new hire</div>
+     <p class="hint">You're not configuring software — you're bringing someone on. Give them a name, tell us where they're working, and what the job is.</p>
+     <label>Their name</label>
+     <input type="text" id="qs-ai-name" placeholder="e.g. Sam" value="${config.ai_name || ""}" />
+     <div class="name-chip-row" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+       ${SUGGESTED_AI_NAMES.map((n) => `<button type="button" class="name-chip" data-name="${n}">${n}</button>`).join("")}
+     </div>
+     <label style="margin-top:18px">Where are they working?</label>
      <input type="text" id="qs-business-name" placeholder="e.g. Piazza Verde" value="${config.business_name && config.business_name !== "My Business" ? config.business_name : ""}" />
      <div style="margin-top:18px">
+       <label style="margin-bottom:8px">What's the job?</label>
        ${Object.entries(byIndustry)
          .map(
            ([industryLabel, tpls]) => `
          <div style="margin-bottom:14px">
-           <label style="margin-bottom:8px">${industryLabel}</label>
+           <label style="margin-bottom:8px;font-weight:normal" class="hint">${industryLabel}</label>
            <div class="template-grid">
              ${tpls.map((t) => `<div class="template-card" data-key="${t.key}"><strong>${t.label}</strong></div>`).join("")}
            </div>
@@ -104,23 +139,35 @@ async function renderWizardStep1(config) {
     })
   );
   const nameInput = document.getElementById("qs-business-name");
+  const aiNameInput = document.getElementById("qs-ai-name");
   nameInput.addEventListener("input", maybeContinue);
+  aiNameInput.addEventListener("input", maybeContinue);
+  app.querySelectorAll(".name-chip").forEach((chip) =>
+    chip.addEventListener("click", () => {
+      aiNameInput.value = chip.dataset.name;
+      maybeContinue();
+    })
+  );
 
   function maybeContinue() {
-    if (document.getElementById("qs-continue")) return;
-    if (!selectedKey || !nameInput.value.trim()) return;
-    const btn = el(`<button class="primary" id="qs-continue" style="margin-top:18px">Continue →</button>`);
+    const existing = document.getElementById("qs-continue");
+    if (existing) existing.remove();
+    if (!selectedKey || !nameInput.value.trim() || !aiNameInput.value.trim()) return;
+    const btn = el(`<button class="primary" id="qs-continue" style="margin-top:18px">Hire ${aiNameInput.value.trim()} →</button>`);
     app.querySelector(".card").appendChild(btn);
     btn.addEventListener("click", async () => {
       btn.disabled = true;
-      btn.textContent = "Setting up…";
+      btn.textContent = "Onboarding…";
       try {
-        await api("/api/config/template", { method: "POST", body: { template_key: selectedKey, business_name: nameInput.value.trim() } });
+        await api("/api/config/template", {
+          method: "POST",
+          body: { template_key: selectedKey, business_name: nameInput.value.trim(), ai_name: aiNameInput.value.trim() },
+        });
         renderQuickStart();
       } catch (err) {
         toast(err.message, "error");
         btn.disabled = false;
-        btn.textContent = "Continue →";
+        btn.textContent = `Hire ${aiNameInput.value.trim()} →`;
       }
     });
   }
@@ -128,10 +175,11 @@ async function renderWizardStep1(config) {
 
 async function renderWizardStep2(config) {
   const { documents, knowledge_label } = await api("/api/knowledge");
+  const name = config.ai_name || "Your new hire";
   wizardShell(
     1,
-    `<div class="big-question">What do you offer?</div>
-     <p class="hint">${knowledge_label || "Menu / info sheet"} — the agent only answers from this, never guesses. Pick whichever is easiest, no website needed.</p>
+    `<div class="big-question">${name}'s first day</div>
+     <p class="hint">Show ${config.ai_name || "them"} around like you would any new employee: hand over the ${(knowledge_label || "menu / info sheet").toLowerCase()}. ${config.ai_name || "They"} will only ever speak from what you give here — never guesses, and says so instead when something's not in it. No website needed.</p>
      <div class="knowledge-source-tabs">
        <button data-src="upload" class="active">Upload a file</button>
        <button data-src="url">Paste a link</button>
@@ -218,7 +266,7 @@ function renderKnowledgeSourceBody(src) {
 }
 
 async function renderWizardStep3ViaFinish() {
-  wizardShell(2, `<div class="big-question">Going live…</div><p class="hint">Setting up your agent.</p>`);
+  wizardShell(2, `<div class="big-question">Getting ready…</div><p class="hint">Onboarding is finishing up.</p>`);
   try {
     await api("/api/config/finish-setup", { method: "POST" });
   } catch (err) {
@@ -228,12 +276,13 @@ async function renderWizardStep3ViaFinish() {
 }
 
 async function renderWizardStep3(config) {
+  const name = config.ai_name || "Your new hire";
   wizardShell(
     2,
-    `<div class="big-question">You're set up.</div>
-     <p class="hint">Your agent is real and configured. Last step is a phone number — that's the only part with a real cost, so nothing happens here without you clicking it.</p>
+    `<div class="big-question">${name} is ready for their first shift</div>
+     <p class="hint">${name} is real and on the clock. Last step is a phone number so people can actually call in — that's the only part with a real cost, so nothing happens here without you clicking it. Once it's live, call in yourself and listen to their first shift.</p>
      <div id="qs-numbers"></div>
-     <div style="margin-top:18px"><a href="#" id="qs-customize-link">Want to fine-tune what it says? Go to Customize →</a></div>`
+     <div style="margin-top:18px"><a href="#" id="qs-customize-link">Want to fine-tune how ${name} talks? Go to Customize →</a></div>`
   );
   await renderPhoneNumberBlock(document.getElementById("qs-numbers"));
   document.getElementById("qs-customize-link").addEventListener("click", (e) => {
@@ -243,13 +292,176 @@ async function renderWizardStep3(config) {
 }
 
 /* =========================================================================
+   Dialpad — modeled directly on JustCall's own softphone dialer (the actual
+   product this whole thing sits alongside): a rounded card, a live digit
+   display, a standard 3-wide T9 keypad with sub-letters, and a circular call
+   button — just recolored into MayAI's warm terracotta/cream brand instead of
+   JustCall's blue/green. Deliberately plain HTML buttons in a CSS grid, not
+   an illustration or custom geometry — that's what actually stayed reliable
+   across the earlier attempts at this widget.
+   ========================================================================= */
+const DIALPAD_KEYS = [
+  { d: "1", l: "" },
+  { d: "2", l: "ABC" },
+  { d: "3", l: "DEF" },
+  { d: "4", l: "GHI" },
+  { d: "5", l: "JKL" },
+  { d: "6", l: "MNO" },
+  { d: "7", l: "PQRS" },
+  { d: "8", l: "TUV" },
+  { d: "9", l: "WXYZ" },
+  { d: "*", l: "" },
+  { d: "0", l: "+" },
+  { d: "#", l: "" },
+];
+
+// Strips everything but digits — nothing else. Deliberately NOT stripping a
+// leading "1": an earlier version special-cased "drop a US country code,"
+// which quietly broke the moment the assigned number wasn't a US number (a
+// UK number's leading 44 isn't a thing to drop the same way, and country-
+// specific exceptions like that don't belong in a helper meant to work for
+// whatever country PyAI actually provisioned). The target to match is always the
+// FULL number exactly as PyAI gave it to us, country code included — so
+// typing/pasting it back in any formatted form ("+1 (779) 278-8816", "779
+// 278 8816" without the code, etc.) is compared against that same full
+// digit string, with no country assumptions baked in on either side.
+function normalizePhoneDigits(raw) {
+  return (raw || "").replace(/\D/g, "");
+}
+
+function buildRotaryDialWidget(phoneNumber, aiName) {
+  const digits = normalizePhoneDigits(phoneNumber).split("");
+  const name = aiName || "your AI";
+
+  const wrap = el(`<div class="dialpad-card">
+    <input type="text" class="dialpad-display" id="dialpad-display" placeholder="Enter number"
+           inputmode="tel" autocomplete="off" />
+    <div class="dialpad-header">Dial ${name}'s line to hear their first shift</div>
+    <div class="dialpad-grid">
+      ${DIALPAD_KEYS.map(
+        (k) =>
+          `<button type="button" class="dialpad-key" data-key="${k.d}" ${k.d === "*" || k.d === "#" ? "disabled" : ""}>
+        <span class="dialpad-digit">${k.d}</span><span class="dialpad-letters">${k.l}</span>
+      </button>`
+      ).join("")}
+    </div>
+    <div class="dialpad-actions">
+      <button type="button" class="dialpad-backspace" id="dialpad-backspace" aria-label="Backspace">⌫</button>
+      <button type="button" class="dialpad-call" id="dialpad-call" aria-label="Call">📞</button>
+    </div>
+    <div class="dialpad-hint" id="dialpad-hint">Type on your keyboard or tap the keys below to dial ${name}'s real number</div>
+  </div>`);
+
+  // The display is a REAL <input> — not just a styled div — specifically so
+  // clicking into it and typing on a keyboard works, same as any normal text
+  // field. The dialpad buttons below are a second way to enter the same
+  // value, not the only way; typed digits sync in both directions off
+  // display.value as the single source of truth (no separate array to drift
+  // out of sync with what's actually in the field).
+  const display = wrap.querySelector("#dialpad-display");
+  const call = wrap.querySelector("#dialpad-call");
+  const hint = wrap.querySelector("#dialpad-hint");
+
+  function render() {
+    const typed = display.value;
+    const matches = typed.length === digits.length && typed === digits.join("");
+    call.classList.toggle("ready", matches);
+    hint.textContent = matches
+      ? `📞 That's it — tap call to talk to ${name}`
+      : `Type on your keyboard or tap the keys below to dial ${name}'s real number`;
+  }
+  render();
+
+  // Keyboard typing (or paste) directly into the field — strip anything that
+  // isn't a digit and clamp to the target length as the user types.
+  display.addEventListener("input", () => {
+    display.value = normalizePhoneDigits(display.value).slice(0, digits.length);
+    render();
+  });
+
+  wrap.querySelectorAll(".dialpad-key:not([disabled])").forEach((key) =>
+    key.addEventListener("click", () => {
+      if (display.value.length >= digits.length) return;
+      display.value += key.dataset.key;
+      display.focus();
+      render();
+    })
+  );
+
+  wrap.querySelector("#dialpad-backspace").addEventListener("click", () => {
+    display.value = display.value.slice(0, -1);
+    display.focus();
+    render();
+  });
+
+  // One call mechanism, not a tel: link that hands off to FaceTime/Phone —
+  // dialing the real number correctly here starts the same real PyAI web
+  // call as the standalone "Talk to X" trigger used to, just gated behind
+  // actually typing the number first (the little "prove you know it" beat).
+  call.addEventListener("click", () => {
+    if (!call.classList.contains("ready")) return;
+    window.openWebCallWidget(name);
+  });
+
+  return wrap;
+}
+
+/* =========================================================================
    Shared: phone number block (used in both Quick Start step 3 and Advanced)
    ========================================================================= */
 async function renderPhoneNumberBlock(container) {
   const { config } = await api("/api/config");
-  container.innerHTML = `<p class="muted">Current: ${config.phone_number || "none yet"}</p>
+  container.innerHTML = "";
+  const name = config.ai_name || "your AI";
+  // One call mechanism, not two: the dialpad's own call button IS the web
+  // call now (see buildRotaryDialWidget) — it used to be a tel: link, which
+  // handed off to FaceTime/Phone instead of actually calling PyAI, and
+  // having a second standalone "Talk to X" button alongside it was
+  // confusing duplication of the same action. Before a real number exists
+  // there's nothing to dial yet, so that's the only case the standalone
+  // button still earns its place.
+  if (config.phone_number) {
+    container.appendChild(buildRotaryDialWidget(config.phone_number, config.ai_name));
+  } else if (config.agent_id) {
+    const webcallBox = el(`<div class="webcall-trigger-box">
+      <button class="primary" id="webcall-trigger-btn">🎙️ Talk to ${name} right here</button>
+      <p class="hint" style="margin-top:8px">A real, live call in your browser — no phone number needed yet.</p>
+    </div>`);
+    container.appendChild(webcallBox);
+    document.getElementById("webcall-trigger-btn").addEventListener("click", () => window.openWebCallWidget(config.ai_name));
+  }
+  // Business-key mode (reached via the marketing site) shares ONE real
+  // phone number across every business - there's no number to "list and
+  // pick", just "put me on it" (go-live rebinds the already-owned number to
+  // THIS business's agent, same endpoint the marketing site itself calls).
+  // /api/telephony/assign doesn't accept business_key and would silently
+  // rebind the SINGLETON's agent instead of this business's - using go-live
+  // here is what actually keeps this correct, not just simpler.
+  if (BUSINESS_KEY) {
+    const goLiveBox = el(`<div>
+      <p class="muted">Current: ${config.phone_number || "not yet on the shared number"}</p>
+      <button class="primary" id="go-live-btn">Put me on the phone</button>
+    </div>`);
+    container.appendChild(goLiveBox);
+    document.getElementById("go-live-btn").addEventListener("click", async () => {
+      try {
+        const result = await api("/api/telephony/go-live", { method: "POST", body: {} });
+        toast(`Live: ${result.phone_number}`);
+        refreshHeader();
+        renderPhoneNumberBlock(container);
+      } catch (err) {
+        toast(err.message, "error");
+      }
+    });
+    return;
+  }
+
+  const adminBox = el(`<div>
+    <p class="muted">Current: ${config.phone_number || "none yet"}</p>
     <button class="secondary" id="pn-list-btn">List my PyAI numbers</button>
-    <div id="pn-list" style="margin-top:10px"></div>`;
+    <div id="pn-list" style="margin-top:10px"></div>
+  </div>`);
+  container.appendChild(adminBox);
   document.getElementById("pn-list-btn").addEventListener("click", async () => {
     const box = document.getElementById("pn-list");
     try {
@@ -331,6 +543,9 @@ async function renderBehavior() {
     el(`<div class="card">
       <h2>Behavior</h2>
       <p class="hint">These fields ARE the system prompt sent to the live agent. Save to push the change to the next call.</p>
+      <label>Their name</label>
+      <p class="hint" style="margin-top:-2px">What the AI calls itself on calls — "Hi, this is ${config.ai_name || "Sam"}!" instead of a generic IVR greeting.</p>
+      <input type="text" id="ai_name" value="${config.ai_name || ""}" />
       <label>Business name</label>
       <input type="text" id="business_name" value="${config.business_name || ""}" />
       <label>Greeting variants</label>
@@ -384,6 +599,7 @@ async function renderBehavior() {
         method: "POST",
         body: {
           business_name: document.getElementById("business_name").value,
+          ai_name: document.getElementById("ai_name").value,
           greeting: finalVariants[0] || "",
           greeting_variants: finalVariants,
           behavior_role: document.getElementById("behavior_role").value,
@@ -549,15 +765,16 @@ async function renderActions() {
   const card = el(`<div class="card">
     <h2>Actions — call log</h2>
     <p class="hint">Every row is a real call. Status is derived from which tool the live agent actually called (or didn't) before the call ended.</p>
+    <p class="hint">"Backfilled" means PyAI's live tool-calling didn't fire (known platform bug) and this row was reconstructed from the ended call's transcript instead — see the Details panel for what actually happened.</p>
     <div class="table-scroll"><table>
-      <thead><tr><th>Started</th><th>Status</th><th>Reason</th><th>${booking_label || "Bookings"}</th><th>Q&amp;A</th><th>${note_label || "Notes"}</th><th></th></tr></thead>
+      <thead><tr><th>Started</th><th>Status</th><th>Reason</th><th>${booking_label || "Bookings"}</th><th>Q&amp;A</th><th>${note_label || "Notes"}</th><th>Source</th><th></th></tr></thead>
       <tbody id="calls-body"></tbody>
     </table></div>
   </div>`);
   app.appendChild(card);
   const body = card.querySelector("#calls-body");
   if (calls.length === 0) {
-    body.innerHTML = `<tr><td colspan="7" class="muted">No calls yet.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" class="muted">No calls yet.</td></tr>`;
   }
   calls.forEach((c) => {
     const tr = el(`<tr>
@@ -567,7 +784,11 @@ async function renderActions() {
       <td>${c.booking_count}</td>
       <td>${c.qa_count}</td>
       <td>${c.note_count}</td>
-      <td><button class="secondary detail-btn" data-id="${c.id}">Details</button></td>
+      <td>${extractionBadge(c.extraction_status)}</td>
+      <td>
+        <button class="secondary detail-btn" data-id="${c.id}">Details</button>
+        ${c.extraction_status === "failed" ? `<button class="secondary reprocess-btn" data-id="${c.id}" style="margin-left:4px">Retry</button>` : ""}
+      </td>
     </tr>`);
     body.appendChild(tr);
   });
@@ -576,17 +797,44 @@ async function renderActions() {
       const existing = document.getElementById(`detail-${btn.dataset.id}`);
       if (existing) return existing.remove();
       const d = await api(`/api/actions/calls/${btn.dataset.id}`);
-      const tr = el(`<tr id="detail-${btn.dataset.id}"><td colspan="7">
+      const tr = el(`<tr id="detail-${btn.dataset.id}"><td colspan="8">
         <div class="call-detail">
           <strong>Transcript</strong>
           ${d.transcript.map((l) => `<div class="transcript-line"><span class="role">${l.role}:</span> ${l.text}</div>`).join("") || '<div class="muted">No transcript captured.</div>'}
           <div style="margin-top:8px"><strong>Tool calls</strong></div>
-          ${d.tool_invocations.map((t) => `<div class="transcript-line">${t.tool_name} — ${t.args_json}</div>`).join("") || '<div class="muted">None.</div>'}
+          ${d.tool_invocations.map((t) => `<div class="transcript-line">${t.tool_name} — ${t.args_json} <span class="muted">(${t.source})</span></div>`).join("") || '<div class="muted">None.</div>'}
+          ${d.call.extraction_status === "failed" ? `<div class="muted" style="margin-top:8px">Backfill failed: ${d.call.extraction_error || "unknown error"}</div>` : ""}
         </div>
       </td></tr>`);
       btn.closest("tr").after(tr);
     })
   );
+  body.querySelectorAll(".reprocess-btn").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Retrying…";
+      try {
+        await api(`/api/actions/calls/${btn.dataset.id}/reprocess`, { method: "POST" });
+        toast("Reprocessed — refreshing.");
+        renderActions();
+      } catch (err) {
+        toast(err.message, "error");
+        btn.disabled = false;
+        btn.textContent = "Retry";
+      }
+    })
+  );
+}
+
+function extractionBadge(status) {
+  const labels = {
+    not_applicable: '<span class="muted">live</span>',
+    pending: '<span class="pill in_progress">backfilling…</span>',
+    success: '<span class="muted">backfilled</span>',
+    failed: '<span class="pill escalated">backfill failed</span>',
+    skipped: '<span class="muted" title="ANTHROPIC_API_KEY not set">skipped</span>',
+  };
+  return labels[status] || '<span class="muted">—</span>';
 }
 
 async function renderAdvanced() {
@@ -633,7 +881,10 @@ async function renderAdvanced() {
     <p class="hint" style="margin-top:4px">Small backchannel sounds ("mm-hmm", "got it") while listening — this is what stops the agent feeling like a form. "auto" is the humane default.</p>
     <label>Consent line (recording disclosure, optional)</label>
     <input type="text" id="consent_line" value="${config.consent_line || ""}" />
-    <label><input type="checkbox" id="recordings_enabled" ${config.recordings_enabled ? "checked" : ""} style="width:auto;margin-right:6px" />Recordings enabled</label>
+    <div class="toggle-row">
+      <button type="button" class="toggle ${config.recordings_enabled ? "on" : ""}" id="recordings_enabled" aria-label="Recordings enabled"></button>
+      <span class="toggle-label">Recordings enabled</span>
+    </div>
     <div style="margin-top:14px"><button class="primary" id="save-advanced">Save</button></div>
   </div>
   <div class="card">
@@ -673,6 +924,10 @@ async function renderAdvanced() {
   }
   renderVoiceGrid();
 
+  document.getElementById("recordings_enabled").addEventListener("click", (e) => {
+    e.currentTarget.classList.toggle("on");
+  });
+
   document.getElementById("save-advanced").addEventListener("click", async () => {
     try {
       await api("/api/config/advanced", {
@@ -684,7 +939,7 @@ async function renderAdvanced() {
           ack_mode: document.getElementById("ack_mode").value,
           idle_check_in: document.getElementById("idle_check_in").value,
           consent_line: document.getElementById("consent_line").value,
-          recordings_enabled: document.getElementById("recordings_enabled").checked,
+          recordings_enabled: document.getElementById("recordings_enabled").classList.contains("on"),
         },
       });
       toast("Saved — pushed to the live agent.");
@@ -721,33 +976,43 @@ async function renderAnalytics() {
 
   const wrap = el(`<div>
   <div class="card">
-    <h2>Analytics</h2>
-    <p class="hint">Every number here comes from real calls. No calls yet = honest zeros, not a demo chart.</p>
-
-    <div class="stat-row">
-      <div class="stat-tile">
-        <div class="stat-num">${a.total_calls}</div>
-        <div class="stat-label">Total calls</div>
+    <h2>Outcomes</h2>
+    <p class="hint">This is what MayAI is actually priced on — real logged actions from real calls, not usage minutes. Zero calls yet = honest zeros here, not a demo chart.</p>
+    <div class="outcome-row">
+      <div class="outcome-tile">
+        <div class="outcome-icon bookings">📅</div>
+        <div><div class="outcome-num">${a.booking_count}</div><div class="outcome-label">${a.booking_label}s made</div></div>
       </div>
-      <div class="stat-tile ${groundingPct !== null && groundingPct < 90 ? "warn" : ""}">
-        <div class="stat-num">${groundingPct === null ? "—" : groundingPct + "%"}</div>
-        <div class="stat-label">Grounded answer rate</div>
+      <div class="outcome-tile">
+        <div class="outcome-icon grounded">💬</div>
+        <div><div class="outcome-num">${a.qa_total}</div><div class="outcome-label">Questions answered</div></div>
       </div>
-      <div class="stat-tile">
-        <div class="stat-num">${a.booking_count}</div>
-        <div class="stat-label">${a.booking_label}s made</div>
+      <div class="outcome-tile">
+        <div class="outcome-icon notes">📝</div>
+        <div><div class="outcome-num">${a.note_count}</div><div class="outcome-label">${a.note_label}s captured</div></div>
       </div>
-      <div class="stat-tile">
-        <div class="stat-num">${a.avg_call_duration_s ? Math.round(a.avg_call_duration_s) + "s" : "—"}</div>
-        <div class="stat-label">Avg. call length</div>
+      <div class="outcome-tile">
+        <div class="outcome-icon escalated">☎️</div>
+        <div><div class="outcome-num">${a.status_breakdown.escalated || 0}</div><div class="outcome-label">Escalations handled</div></div>
       </div>
     </div>
+  </div>
 
-    <p class="hint" style="margin-top:2px">Grounded answer rate is the needle-mover metric (see README) — the share of menu/Q&amp;A answers that actually traced to real uploaded knowledge instead of being guessed.</p>
+  <div class="card gauge-card">
+    <div class="gauge-ring" style="--pct:${groundingPct ?? 0}">
+      <div class="gauge-ring-label">
+        <div class="gauge-ring-num">${groundingPct === null ? "—" : groundingPct + "%"}</div>
+        <div class="gauge-ring-sub">grounded</div>
+      </div>
+    </div>
+    <div>
+      <h2 style="margin-bottom:4px">Grounded answer rate</h2>
+      <p class="hint" style="margin-top:0">The needle-mover metric (see README) — the share of answers that actually traced to real uploaded knowledge instead of being guessed. ${a.total_calls} total calls so far, averaging ${a.avg_call_duration_s ? Math.round(a.avg_call_duration_s) + "s" : "—"} each.</p>
+    </div>
   </div>
 
   <div class="card">
-    <h3 style="margin:0 0 12px">Call outcomes</h3>
+    <h3 style="margin:0 0 12px">Call status breakdown</h3>
     ${
       totalStatus === 0
         ? '<p class="muted">No calls yet.</p>'
@@ -814,29 +1079,46 @@ const tabRenderers = {
   advanced: renderAdvanced,
 };
 
-document.getElementById("tabs").addEventListener("click", (e) => {
-  const btn = e.target.closest("button[data-tab]");
-  if (!btn) return;
-  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b === btn));
-  tabRenderers[btn.dataset.tab]();
-});
+const pageTitle = document.getElementById("page-title");
+const TAB_TITLES = {
+  templates: "Templates",
+  behavior: "Behavior",
+  knowledge: "Knowledge",
+  callflow: "Call Flow",
+  actions: "Actions",
+  analytics: "Analytics",
+  advanced: "Advanced",
+};
 
-function switchMode(mode) {
-  document.querySelectorAll("#modes button").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
-  document.getElementById("tabs").style.display = mode === "customize" ? "flex" : "none";
-  if (mode === "quickstart") {
+document.getElementById("sidenav").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-mode]");
+  if (!btn) return;
+  document.querySelectorAll("#sidenav button[data-mode]").forEach((b) => b.classList.toggle("active", b === btn));
+  if (btn.dataset.mode === "quickstart") {
+    pageTitle.textContent = "Quick Start";
     renderQuickStart();
   } else {
-    document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === "templates"));
+    pageTitle.textContent = TAB_TITLES[btn.dataset.tab] || "Customize";
+    tabRenderers[btn.dataset.tab]();
+  }
+});
+
+// Kept as a plain function (rather than folded into the click handler above)
+// since a few flows navigate here programmatically — e.g. the Quick Start
+// wizard's "fine-tune in Customize" link — not just a direct sidebar click.
+function switchMode(mode) {
+  const targetTab = mode === "customize" ? "templates" : "";
+  document.querySelectorAll("#sidenav button[data-mode]").forEach((b) => {
+    b.classList.toggle("active", b.dataset.mode === mode && (mode !== "customize" || b.dataset.tab === targetTab));
+  });
+  if (mode === "quickstart") {
+    pageTitle.textContent = "Quick Start";
+    renderQuickStart();
+  } else {
+    pageTitle.textContent = "Templates";
     renderTemplates();
   }
 }
-
-document.getElementById("modes").addEventListener("click", (e) => {
-  const btn = e.target.closest("button[data-mode]");
-  if (!btn) return;
-  switchMode(btn.dataset.mode);
-});
 
 refreshHeader();
 renderQuickStart();
