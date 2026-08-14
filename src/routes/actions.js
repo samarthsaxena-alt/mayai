@@ -3,6 +3,7 @@
 // without one), never seeded/mocked data.
 import { db, getConfig } from "../db.js";
 import { getTemplate } from "../industries.js";
+import { processCallTranscript } from "../extraction.js";
 
 export default async function actionsRoutes(app) {
   app.get("/api/actions/calls", async (req, reply) => {
@@ -34,6 +35,16 @@ export default async function actionsRoutes(app) {
       notes: db.prepare(`SELECT * FROM notes WHERE call_id = ?`).all(id),
       tool_invocations: db.prepare(`SELECT * FROM tool_invocations WHERE call_id = ? ORDER BY created_at, id`).all(id),
     });
+  });
+
+  // Manual retry for the transcript-extraction workaround (src/extraction.js)
+  // — useful since the automatic pass on call-end is fire-and-forget and can
+  // fail transiently (e.g. transcript not yet finalized, a rate limit).
+  app.post("/api/actions/calls/:id/reprocess", async (req, reply) => {
+    const call = db.prepare(`SELECT * FROM calls WHERE id = ?`).get(req.params.id);
+    if (!call) return reply.code(404).send({ error: "not found" });
+    const result = await processCallTranscript(call.id, call.agent_id, getConfig());
+    return reply.send(result);
   });
 
   app.get("/api/actions/bookings", async (req, reply) => {

@@ -81,6 +81,61 @@ export function buildToolDefs(config) {
   ];
 }
 
+/**
+ * A single combined JSON Schema for PyAI's NATIVE post-call extraction
+ * feature (Agent.extraction_schema + extraction_webhook_url) — a first-party
+ * equivalent of our own transcript-extraction workaround (src/extraction.js),
+ * potentially running over a different, more reliable internal pipeline than
+ * the one behind the flaky GET /v1/omni/calls/{id}/transcript endpoint. Same
+ * 4 shapes as buildToolDefs, just merged into one object (arrays for
+ * repeatable things) since this is "fields to capture from the whole call,"
+ * not repeated tool invocations.
+ */
+export function buildExtractionSchema(config) {
+  const tpl = getTemplate(config.template_key);
+  return {
+    type: "object",
+    properties: {
+      bookings: {
+        type: "array",
+        description: `Every ${tpl.bookingLabel.toLowerCase()} confirmed during the call, in order.`,
+        items: {
+          type: "object",
+          required: ["name", "date", "time", tpl.bookingDetailField.key],
+          properties: {
+            name: { type: "string", description: `Name the ${tpl.bookingLabel.toLowerCase()} is under.` },
+            date: { type: "string" },
+            time: { type: "string" },
+            [tpl.bookingDetailField.key]: { type: tpl.bookingDetailField.type === "integer" ? "integer" : "string", description: tpl.bookingDetailField.label },
+          },
+        },
+      },
+      qa_answers: {
+        type: "array",
+        description: "Every question answered (or declined) during the call, in order.",
+        items: {
+          type: "object",
+          required: ["question", "answer", "intent", "grounded"],
+          properties: {
+            question: { type: "string" },
+            answer: { type: "string" },
+            intent: { type: "string", enum: tpl.qaIntents.map((q) => q.key) },
+            grounded: { type: "boolean", description: "True only if the answer came from the knowledge base." },
+            source_excerpt: { type: "string" },
+          },
+        },
+      },
+      notes: {
+        type: "array",
+        description: `Every ${tpl.noteLabel.toLowerCase()} mentioned during the call.`,
+        items: { type: "object", required: ["note"], properties: { note: { type: "string" } } },
+      },
+      escalated: { type: "boolean", description: "True if the call needed to be handed to a human." },
+      escalation_reason: { type: "string" },
+    },
+  };
+}
+
 function webhookBase() {
   const host = process.env.PUBLIC_HOST;
   if (!host) throw new Error("PUBLIC_HOST must be set to register tool webhooks PyAI's engine can reach.");
@@ -139,10 +194,20 @@ function ensureCall(callId, agentId) {
   db.prepare(`INSERT OR IGNORE INTO calls (id, agent_id) VALUES (?, ?)`).run(callId, agentId || null);
 }
 
-function recordInvocation(callId, toolName, args, result) {
+function recordInvocation(callId, toolName, args, result, source = "live_tool_call") {
   db.prepare(
-    `INSERT INTO tool_invocations (call_id, tool_name, args_json, result_json) VALUES (?, ?, ?, ?)`
-  ).run(callId, toolName, JSON.stringify(args ?? {}), JSON.stringify(result ?? {}));
+    `INSERT INTO tool_invocations (call_id, tool_name, args_json, result_json, source) VALUES (?, ?, ?, ?, ?)`
+  ).run(callId, toolName, JSON.stringify(args ?? {}), JSON.stringify(result ?? {}), source);
+}
+
+/** True if any of the 4 real tools already fired live on this call — the
+ * transcript-extraction workaround should skip a call entirely once PyAI's
+ * bug is fixed and live tool-calling is working again, rather than double-log. */
+export function hasLiveToolActivity(callId) {
+  const row = db
+    .prepare(`SELECT COUNT(*) AS n FROM tool_invocations WHERE call_id = ? AND source = 'live_tool_call' AND tool_name NOT LIKE '%:result'`)
+    .get(callId);
+  return (row?.n || 0) > 0;
 }
 
 /** Escalated wins over completed; completed wins over partial (still in_progress / never resolved). */
@@ -157,29 +222,29 @@ function markCallStatus(callId, status, reason) {
 
 /** The actual handlers, keyed by tool name. Each returns the JSON PyAI forwards to the model. */
 export const TOOL_HANDLERS = {
-  log_booking(callId, agentId, args, config) {
+  log_booking(callId, agentId, args, config, source) {
     ensureCall(callId, agentId);
     const tpl = getTemplate(config.template_key);
     const { name, date, time } = args;
     const detailValue = args[tpl.bookingDetailField.key];
     const info = db
-      .prepare(`INSERT INTO bookings (call_id, name, booking_date, booking_time, detail_label, detail_value) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(callId, name, date, time, tpl.bookingDetailField.label, detailValue != null ? String(detailValue) : null);
+      .prepare(`INSERT INTO bookings (call_id, name, booking_date, booking_time, detail_label, detail_value, source) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(callId, name, date, time, tpl.bookingDetailField.label, detailValue != null ? String(detailValue) : null, source);
     markCallStatus(callId, "completed", `${tpl.bookingLabel.toLowerCase()} #${info.lastInsertRowid} booked`);
     return { ok: true, booking_id: info.lastInsertRowid };
   },
-  log_qa_answer(callId, agentId, args) {
+  log_qa_answer(callId, agentId, args, config, source) {
     ensureCall(callId, agentId);
     const { question, answer, intent, grounded, source_excerpt } = args;
     const info = db
-      .prepare(`INSERT INTO qa_answers (call_id, question, answer, intent, grounded, source_excerpt) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(callId, question, answer, intent, grounded ? 1 : 0, source_excerpt || null);
+      .prepare(`INSERT INTO qa_answers (call_id, question, answer, intent, grounded, source_excerpt, source) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(callId, question, answer, intent, grounded ? 1 : 0, source_excerpt || null, source);
     markCallStatus(callId, "completed", `"${intent}" question answered (grounded=${!!grounded})`);
     return { ok: true, qa_id: info.lastInsertRowid };
   },
-  log_note(callId, agentId, args) {
+  log_note(callId, agentId, args, config, source) {
     ensureCall(callId, agentId);
-    const info = db.prepare(`INSERT INTO notes (call_id, note) VALUES (?, ?)`).run(callId, args.note);
+    const info = db.prepare(`INSERT INTO notes (call_id, note, source) VALUES (?, ?, ?)`).run(callId, args.note, source);
     markCallStatus(callId, "completed", "note logged");
     return { ok: true, note_id: info.lastInsertRowid };
   },
@@ -192,11 +257,58 @@ export const TOOL_HANDLERS = {
 
 /** Called by the webhook route. Records the invocation and runs the handler. */
 export function handleToolCall(toolName, { call_id, agent_id, arguments: args }, config) {
-  recordInvocation(call_id, toolName, args, null);
+  recordInvocation(call_id, toolName, args, null, "live_tool_call");
   const handler = TOOL_HANDLERS[toolName];
   if (!handler) return { error: `unknown tool ${toolName}` };
-  const result = handler(call_id, agent_id, args || {}, config);
-  recordInvocation(call_id, `${toolName}:result`, args, result);
+  const result = handler(call_id, agent_id, args || {}, config, "live_tool_call");
+  recordInvocation(call_id, `${toolName}:result`, args, result, "live_tool_call");
+  return result;
+}
+
+/**
+ * Applies one action the transcript-extraction workaround (src/extraction.js)
+ * inferred happened on an ended call, using the exact same handlers and
+ * tables the live webhook path writes to — the Actions/Analytics UI needs no
+ * changes, only every row it reads carries source = 'transcript_extraction'
+ * so nothing pretends to be a live tool call it wasn't.
+ */
+export function applyExtractedAction(callId, agentId, toolName, args, config) {
+  return applyExtractedActionWithSource(callId, agentId, toolName, args, config, "transcript_extraction");
+}
+
+/**
+ * Applies PyAI's own native post-call extraction payload (the
+ * `omni.call.extracted` webhook, shaped by buildExtractionSchema) — a third
+ * provenance alongside 'live_tool_call' and 'transcript_extraction', tagged
+ * 'pyai_native_extraction' so the Actions UI can tell all three apart.
+ */
+export function applyNativeExtraction(callId, agentId, payload, config) {
+  const applied = { bookings: 0, qa_answers: 0, notes: 0, escalated: false };
+  for (const b of payload.bookings || []) {
+    applyExtractedActionWithSource(callId, agentId, "log_booking", b, config, "pyai_native_extraction");
+    applied.bookings++;
+  }
+  for (const qa of payload.qa_answers || []) {
+    applyExtractedActionWithSource(callId, agentId, "log_qa_answer", qa, config, "pyai_native_extraction");
+    applied.qa_answers++;
+  }
+  for (const n of payload.notes || []) {
+    applyExtractedActionWithSource(callId, agentId, "log_note", n, config, "pyai_native_extraction");
+    applied.notes++;
+  }
+  if (payload.escalated) {
+    applyExtractedActionWithSource(callId, agentId, "escalate_to_human", { reason: payload.escalation_reason || "escalated" }, config, "pyai_native_extraction");
+    applied.escalated = true;
+  }
+  return applied;
+}
+
+function applyExtractedActionWithSource(callId, agentId, toolName, args, config, source) {
+  recordInvocation(callId, toolName, args, null, source);
+  const handler = TOOL_HANDLERS[toolName];
+  if (!handler) return { error: `unknown tool ${toolName}` };
+  const result = handler(callId, agentId, args || {}, config, source);
+  recordInvocation(callId, `${toolName}:result`, args, result, source);
   return result;
 }
 

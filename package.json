@@ -13,6 +13,7 @@
     "spike": "node --env-file=.env scripts/omni-spike.js"
   },
   "dependencies": {
+    "@fastify/cors": "^11.3.0",
     "@fastify/multipart": "^9.0.1",
     "@fastify/static": "^8.0.3",
     "@fastify/websocket": "^11.0.1",
