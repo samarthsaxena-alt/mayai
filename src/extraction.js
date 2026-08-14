@@ -16,7 +16,7 @@
 // else in the app needs to change.
 import { db } from "./db.js";
 import { omni } from "./pyai.js";
-import { messages as anthropicMessages, isConfigured as anthropicConfigured } from "./anthropic.js";
+import { messages as anthropicMessages, isConfigured as anthropicConfigured, usageSummary } from "./anthropic.js";
 import { buildToolDefs, applyExtractedAction, hasLiveToolActivity } from "./tools.js";
 
 const POLL_ATTEMPTS = 5;
@@ -98,6 +98,9 @@ async function runExtraction(turns, config) {
     tool_choice: { type: "auto" },
     max_tokens: 4096,
   });
+  // Nothing in the schema records what extraction costs, so log it per call:
+  // this is the only usage signal we have until it's persisted properly.
+  console.log("[extraction] token usage", JSON.stringify(usageSummary(response)));
   return (response?.content || []).filter((block) => block.type === "tool_use").map((block) => ({ name: block.name, input: block.input }));
 }
 
