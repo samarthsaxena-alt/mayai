@@ -6,3 +6,7 @@ data/*.db-wal
 data/*.db-shm
 *.log
 .DS_Store
+
+# Vendored third-party tunnel binaries (~67MB) - install these yourself, see README
+bin/
+
