@@ -14,9 +14,10 @@
 // place "the agent" lives (PyAI), matching the brief's capability-registry
 // requirement (model/voice/language is config, not hardcoded here).
 import { connectStreamTwiML, OmniAgent } from "@pyai/twilio";
-import { getConfig, updateConfig, db } from "../db.js";
+import { getConfig, updateConfig, getBusinessByKey, db } from "../db.js";
 import { telephony } from "../pyai.js";
 import { finalizeCall } from "../tools.js";
+import { processCallTranscript } from "../extraction.js";
 
 export default async function telephonyRoutes(app) {
   // --- Path 1: PyAI-native numbers -----------------------------------------
@@ -48,6 +49,31 @@ export default async function telephonyRoutes(app) {
       const result = await telephony.assignNumber(number_id, config.agent_id);
       updateConfig({ phone_number: phone_number || result.phone_number, phone_number_id: number_id, telephony_mode: "pyai_native" });
       return reply.send(result);
+    } catch (err) {
+      return reply.code(502).send({ error: String(err.message || err) });
+    }
+  });
+
+  // Public marketing-site flow's "put me on the phone" step. Businesses each
+  // keep their own persistent agent_id/kb_id (src/db.js: businesses table),
+  // but there is still only ONE real phone number owned on the account — it
+  // can only ever be bound to one agent at a time. This just re-binds the
+  // already-owned number to whichever verified business asks; it costs
+  // nothing extra (no new number purchased, see /api/telephony/provision for
+  // the one action that does), but it does mean whoever calls this last is
+  // the one the phone number currently answers as. That's a real, disclosed
+  // limitation — see [[mayai-website-artifact]] memory — not a bug to hide.
+  app.post("/api/telephony/go-live", async (req, reply) => {
+    const { business_key } = req.body || {};
+    if (!business_key) return reply.code(400).send({ error: "business_key required" });
+    const biz = getBusinessByKey(business_key);
+    if (!biz || !biz.agent_id) return reply.code(400).send({ error: "business not configured yet — call /api/config/template first" });
+    try {
+      const numbers = await telephony.listNumbers();
+      const owned = (numbers.data || [])[0];
+      if (!owned) return reply.code(400).send({ error: "no phone number owned yet" });
+      const result = await telephony.assignNumber(owned.id, biz.agent_id);
+      return reply.send({ phone_number: result.phone_number || owned.phone_number, business_name: biz.business_name });
     } catch (err) {
       return reply.code(502).send({ error: String(err.message || err) });
     }
@@ -93,7 +119,16 @@ export default async function telephonyRoutes(app) {
       onError: (err) => app.log.error(err, "omni bridge error"),
       onClose: () => {
         const callId = bridge.callSid || bridge.streamSid;
-        if (callId) finalizeCall(callId, "call ended");
+        if (!callId) return;
+        finalizeCall(callId, "call ended");
+        // Fire-and-forget: PyAI's custom tool-calling doesn't fire live (see
+        // [[mayai-pyai-tool-calling-bug]]), so backfill from the ended call's
+        // transcript instead. Never blocks the WS from closing; failures are
+        // recorded on the call row (extraction_status/extraction_error) for
+        // the Actions UI to surface, not thrown here.
+        processCallTranscript(callId, config.agent_id, config).catch((err) =>
+          app.log.error(err, "transcript extraction pipeline failed")
+        );
       },
     });
   });

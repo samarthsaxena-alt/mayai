@@ -20,7 +20,8 @@ function parseQaIntents(json) {
 
 export function buildPersonaPrompt(config) {
   const name = config.business_name || "the business";
-  const fill = (t) => fillPlaceholders(t, name);
+  const aiName = config.ai_name;
+  const fill = (t) => fillPlaceholders(t, name, aiName);
   const tpl = getTemplate(config.template_key);
   const qaIntents = parseQaIntents(config.callflow_qa_intents_json);
 
@@ -33,7 +34,11 @@ ${qa.hardRule ? "This is a hard rule — do not bend it even if the caller insis
     )
     .join("\n\n");
 
-  return `${fill(config.behavior_role)}
+  const nameLine = aiName
+    ? `Your name is ${aiName}. If asked who you are or who you're talking to, say you're ${aiName} — never call yourself "an AI" or "a bot" unprompted, but never deny being one if asked directly.\n\n`
+    : "";
+
+  return `${nameLine}${fill(config.behavior_role)}
 
 PERSONALITY & STYLE
 ${fill(config.behavior_personality)}
@@ -55,13 +60,21 @@ FALLBACK (anything outside the above)
 ${fill(config.callflow_fallback_policy)}
 Call the escalate_to_human tool with a short reason before ending the call. Tell the caller a team member will call them back, then end the call gracefully. Do not attempt to answer or resolve requests outside your scope yourself.
 
+ENDING THE CALL
+Never end a call right after resolving one request. Once you've handled what the caller asked for, always check in first: ask something like "Is there anything else I can help you with?" Only after the caller says no (or the conversation makes clear they're done) do you close out — and close warmly, by name, mentioning ${name} specifically (e.g. "Thanks so much for calling ${name}, have a great day!") — never a flat, generic "goodbye."
+
 GENERAL RULES
 - One topic per reply. Keep replies short.
 - Always confirm details back to the caller before calling log_booking.
 - Never invent facts, prices, or details the knowledge base doesn't contain. If it's not in there, say so plainly.
+- Always check in ("anything else?") before ending a call, and always close warmly by name — never hang up right after finishing one request.
 - If the caller speaks in Hindi, continue the conversation in Hindi.`;
 }
 
 export function buildGreeting(config) {
-  return fillPlaceholders(config.greeting, config.business_name);
+  const filled = fillPlaceholders(config.greeting, config.business_name, config.ai_name);
+  // Lead with the AI's own name when one's been given — "meet your AI" only
+  // lands as a hiring moment if the caller actually hears a name, not just
+  // "thanks for calling" like every other IVR.
+  return config.ai_name ? `Hi, this is ${config.ai_name}! ${filled}` : filled;
 }

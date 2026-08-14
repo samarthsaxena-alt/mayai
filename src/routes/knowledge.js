@@ -12,14 +12,23 @@
 // server-side — we don't hand-roll parsing for any of them. No knowledge
 // source at all = the agent's persona already tells it to say so rather than
 // guess (see promptBuilder.js).
-import { getConfig, updateConfig, db } from "../db.js";
+import { getConfig, updateConfig, getBusinessByKey, updateBusiness, db } from "../db.js";
 import { knowledgebases } from "../pyai.js";
 import { syncAgent } from "../agentSync.js";
 import { getTemplate } from "../industries.js";
 
 const MAX_RETRIES = 2;
 
-async function ensureKb(businessName, knowledgeLabel) {
+// Pass `biz` (a row from the businesses table) to scope the knowledgebase to
+// that specific business instead of the internal builder's singleton config
+// — see agentSync.js/config.js for the same business_key convention.
+async function ensureKb(businessName, knowledgeLabel, biz) {
+  if (biz) {
+    if (biz.kb_id) return biz.kb_id;
+    const kb = await knowledgebases.create(`${businessName || biz.business_name} — ${knowledgeLabel || "knowledge"}`);
+    updateBusiness(biz.id, { kb_id: kb.id });
+    return kb.id;
+  }
   const config = getConfig();
   if (config.kb_id) return config.kb_id;
   const kb = await knowledgebases.create(`${businessName || "Open Receptionist"} — ${knowledgeLabel || "knowledge"}`);
@@ -27,8 +36,10 @@ async function ensureKb(businessName, knowledgeLabel) {
   return kb.id;
 }
 
-function insertDoc(filename, source) {
-  return db.prepare(`INSERT INTO knowledge_documents (filename, source, status) VALUES (?, ?, 'pending')`).run(filename, source);
+function insertDoc(filename, source, businessId) {
+  return db
+    .prepare(`INSERT INTO knowledge_documents (filename, source, status, business_id) VALUES (?, ?, 'pending', ?)`)
+    .run(filename, source, businessId || null);
 }
 
 // Recording the document's own status and binding the KB to the agent are
@@ -44,9 +55,9 @@ function recordDocSuccess(info, uploaded) {
   );
 }
 
-async function bindKbBestEffort(req) {
+async function bindKbBestEffort(req, businessId) {
   try {
-    await syncAgent(); // binds the KB to the agent the first time one exists
+    await syncAgent(businessId); // binds the KB to the agent the first time one exists
   } catch (err) {
     req.log.warn(err, "document indexed, but syncing the agent (e.g. tool webhooks) failed — will retry on next save");
   }
@@ -58,9 +69,21 @@ function onUploadFail(info, err) {
 
 export default async function knowledgeRoutes(app) {
   app.get("/api/knowledge", async (req, reply) => {
-    const config = getConfig();
+    const { business_key } = req.query || {};
+    let biz = null;
+    if (business_key) {
+      biz = getBusinessByKey(business_key);
+      if (!biz) return reply.code(404).send({ error: "unknown business_key" });
+    }
+    const config = biz || getConfig();
     const tpl = getTemplate(config.template_key);
-    const docs = db.prepare(`SELECT * FROM knowledge_documents ORDER BY uploaded_at DESC`).all();
+    // Scoped to this business's own documents when business_key is given -
+    // without this filter every business sharing this builder UI would see
+    // every OTHER business's uploaded documents too (a real data leak, not
+    // just a cosmetic wrong-step bug).
+    const docs = biz
+      ? db.prepare(`SELECT * FROM knowledge_documents WHERE business_id = ? ORDER BY uploaded_at DESC`).all(biz.id)
+      : db.prepare(`SELECT * FROM knowledge_documents WHERE business_id IS NULL ORDER BY uploaded_at DESC`).all();
 
     // Refresh status for anything not yet indexed/failed-out. Uses the
     // whole-knowledgebase GET (returns each document inline) rather than the
@@ -95,20 +118,29 @@ export default async function knowledgeRoutes(app) {
     });
   });
 
+  // business_key travels as a query param here (not a multipart field) —
+  // simpler than parsing extra fields out of a multipart body alongside the
+  // file. Same convention as the JSON routes below otherwise.
   app.post("/api/knowledge/upload", async (req, reply) => {
     const file = await req.file();
     if (!file) return reply.code(400).send({ error: "no file uploaded" });
 
-    const config = getConfig();
+    const businessKey = req.query?.business_key;
+    let biz = null;
+    if (businessKey) {
+      biz = getBusinessByKey(businessKey);
+      if (!biz) return reply.code(400).send({ error: "unknown business_key — call /api/config/template first" });
+    }
+    const config = biz || getConfig();
     const tpl = getTemplate(config.template_key);
     const buffer = await file.toBuffer();
-    const kbId = await ensureKb(config.business_name, tpl.knowledgeLabel);
-    const info = insertDoc(file.filename, "upload");
+    const kbId = await ensureKb(config.business_name, tpl.knowledgeLabel, biz);
+    const info = insertDoc(file.filename, "upload", biz ? biz.id : null);
 
     try {
       const uploaded = await knowledgebases.uploadFile(kbId, buffer, file.filename, file.filename);
       recordDocSuccess(info, uploaded);
-      await bindKbBestEffort(req);
+      await bindKbBestEffort(req, biz ? biz.id : undefined);
       return reply.send({ document_id: info.lastInsertRowid, kb_doc_id: uploaded.id, status: uploaded.status });
     } catch (err) {
       onUploadFail(info, err);
@@ -120,18 +152,23 @@ export default async function knowledgeRoutes(app) {
   // No PDF, but they have a Google Business Profile / Facebook Page / Yelp
   // listing URL — point PyAI at it directly.
   app.post("/api/knowledge/url", async (req, reply) => {
-    const { url } = req.body || {};
+    const { url, business_key } = req.body || {};
     if (!url) return reply.code(400).send({ error: "no url provided" });
 
-    const config = getConfig();
+    let biz = null;
+    if (business_key) {
+      biz = getBusinessByKey(business_key);
+      if (!biz) return reply.code(400).send({ error: "unknown business_key — call /api/config/template first" });
+    }
+    const config = biz || getConfig();
     const tpl = getTemplate(config.template_key);
-    const kbId = await ensureKb(config.business_name, tpl.knowledgeLabel);
-    const info = insertDoc(url, "url");
+    const kbId = await ensureKb(config.business_name, tpl.knowledgeLabel, biz);
+    const info = insertDoc(url, "url", biz ? biz.id : null);
 
     try {
       const added = await knowledgebases.addUrl(kbId, url, url);
       recordDocSuccess(info, added);
-      await bindKbBestEffort(req);
+      await bindKbBestEffort(req, biz ? biz.id : undefined);
       return reply.send({ document_id: info.lastInsertRowid, kb_doc_id: added.id, status: added.status });
     } catch (err) {
       onUploadFail(info, err);
@@ -142,19 +179,24 @@ export default async function knowledgeRoutes(app) {
 
   // No file, no website — just typed-in text (a plain Q&A / price list form).
   app.post("/api/knowledge/text", async (req, reply) => {
-    const { text, title } = req.body || {};
+    const { text, title, business_key } = req.body || {};
     if (!text || !text.trim()) return reply.code(400).send({ error: "no text provided" });
 
-    const config = getConfig();
+    let biz = null;
+    if (business_key) {
+      biz = getBusinessByKey(business_key);
+      if (!biz) return reply.code(400).send({ error: "unknown business_key — call /api/config/template first" });
+    }
+    const config = biz || getConfig();
     const tpl = getTemplate(config.template_key);
-    const kbId = await ensureKb(config.business_name, tpl.knowledgeLabel);
+    const kbId = await ensureKb(config.business_name, tpl.knowledgeLabel, biz);
     const label = title || "Typed-in info";
-    const info = insertDoc(label, "text");
+    const info = insertDoc(label, "text", biz ? biz.id : null);
 
     try {
       const added = await knowledgebases.addText(kbId, text, label);
       recordDocSuccess(info, added);
-      await bindKbBestEffort(req);
+      await bindKbBestEffort(req, biz ? biz.id : undefined);
       return reply.send({ document_id: info.lastInsertRowid, kb_doc_id: added.id, status: added.status });
     } catch (err) {
       onUploadFail(info, err);

@@ -21,11 +21,11 @@ function apiKey() {
   return key;
 }
 
-async function request(method, path, { body, form, query } = {}) {
+async function request(method, path, { body, form, query, headers: extraHeaders } = {}) {
   const url = new URL(BASE_URL + path);
   if (query) for (const [k, v] of Object.entries(query)) if (v != null) url.searchParams.set(k, v);
 
-  const headers = { Authorization: `Bearer ${apiKey()}` };
+  const headers = { Authorization: `Bearer ${apiKey()}`, ...extraHeaders };
   let payload;
   if (form) {
     payload = form; // a FormData instance; fetch sets the multipart boundary itself
@@ -127,6 +127,45 @@ export const tools = {
   },
 };
 
+// --- Omni (realtime voice sessions) ---------------------------------------
+export const omni = {
+  // Confirmed-reliable after a call ends (unlike the live tool-call/transcript
+  // events over the WS) — see [[mayai-pyai-tool-calling-bug]]. Backs the
+  // transcript-extraction workaround in src/extraction.js.
+  getTranscript(callId) {
+    return request("GET", `/v1/omni/calls/${callId}/transcript`);
+  },
+  // Newest-first list of ended Omni sessions, filterable by the session_label
+  // we pass on connect (we use the agent_id as that label). This is the one
+  // call-lifecycle signal that works identically whether the call arrived via
+  // a PyAI-native number or the Twilio bridge — src/callPoller.js uses it to
+  // detect "a call just ended" without needing PyAI to push us anything.
+  listCalls({ session_label, limit, cursor } = {}) {
+    return request("GET", "/v1/omni/calls", { query: { session_label, limit, cursor } });
+  },
+  // Mints a short-lived, origin-locked token so a BROWSER can open one Omni
+  // session directly against PyAI, without ever holding PYAI_API_KEY. Backs
+  // src/routes/webcall.js's token-mint endpoint — confirmed by direct testing
+  // that session_label alone (no inline configure frame) auto-loads the
+  // agent's real greeting/persona/KB/tools binding here exactly like it does
+  // for native telephony, and that an established session survives well past
+  // the token's own ttl_seconds (that only gates the initial handshake).
+  createSession({ allowed_origins, session_label, ttl_seconds } = {}) {
+    return request("POST", "/v1/omni/sessions", { body: { allowed_origins, session_label, ttl_seconds } });
+  },
+};
+
+// --- Webhook signing (post-call extraction / transcription-job webhooks) --
+export const webhookSigning = {
+  status() {
+    return request("GET", "/v1/webhooks/signing-secret");
+  },
+  // Returns { secret: "whsec_..." } ONCE — store it immediately, PyAI never shows it again.
+  rotate() {
+    return request("POST", "/v1/webhooks/signing-secret");
+  },
+};
+
 // --- Voices ----------------------------------------------------------------
 export const voices = {
   list() {
@@ -139,8 +178,15 @@ export const telephony = {
   listNumbers() {
     return request("GET", "/v1/telephony/numbers");
   },
-  provisionNumber(body) {
-    return request("POST", "/v1/telephony/numbers", { body });
+  // $1/mo for US/CA, $6/mo for India (per PyAI's own docs) — always show this
+  // to the user before provisionNumber() actually buys anything.
+  searchAvailable({ country, area_code, contains, limit } = {}) {
+    return request("GET", "/v1/telephony/available", { query: { country, area_code, contains, limit } });
+  },
+  // Idempotency-Key is required by PyAI so a retry never double-buys a
+  // number; reusing the same key + body just replays the original result.
+  provisionNumber(body, idempotencyKey) {
+    return request("POST", "/v1/telephony/numbers", { body, headers: { "Idempotency-Key": idempotencyKey } });
   },
   assignNumber(numberId, agentId) {
     return request("POST", `/v1/telephony/numbers/${numberId}/assign`, { body: { agent_id: agentId } });

@@ -275,6 +275,12 @@ export function getTemplate(templateKey) {
   return getTemplate("restaurant_general");
 }
 
-export function fillPlaceholders(text, businessName) {
-  return (text || "").replaceAll("{{business_name}}", businessName || "the business");
+export function fillPlaceholders(text, businessName, aiName) {
+  return (text || "")
+    .replaceAll("{{business_name}}", businessName || "the business")
+    .replaceAll("{{ai_name}}", aiName || "your AI receptionist");
 }
+
+// A short, warm, gender-neutral starter list for the "name your AI" step of
+// Quick Start — quick-pick chips, not a limit (the field is free text).
+export const SUGGESTED_AI_NAMES = ["Sam", "Alex", "Jamie", "Riley", "Morgan", "Casey"];
