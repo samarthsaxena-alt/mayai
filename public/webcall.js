@@ -87,26 +87,107 @@
     return overlay;
   }
 
-  function buildSummary(overlay, name, lines, durationLabel) {
+  const OUTCOME_META = {
+    bookings: { icon: "📅", singular: "booking", plural: "bookings" },
+    qa_answers: { icon: "💬", singular: "question answered", plural: "questions answered" },
+    notes: { icon: "📝", singular: "note", plural: "notes" },
+    tool_invocations: { icon: "📣", singular: "escalation", plural: "escalations" },
+  };
+
+  function pluralize(n, meta) {
+    return `${n} ${n === 1 ? meta.singular : meta.plural}`;
+  }
+
+  /** Renders the two-tab post-call screen (Call Summary / Transcript),
+   * modeled on JustCall AIVA's own "Talk to Mia" post-call screen. `detail`
+   * is either the full GET /api/actions/calls/:id payload once the
+   * transcript-extraction backfill has finished, or null if it's still
+   * processing / never arrived — the screen degrades to whatever was
+   * captured live client-side in that case. */
+  function buildSummary(overlay, name, localLines, durationLabel, detail, stillProcessing) {
     const card = overlay.querySelector(".webcall-card");
+    const transcriptLines = detail?.transcript?.length
+      ? detail.transcript.map((t) => ({ role: t.role === "assistant" ? name : "You", text: t.text }))
+      : localLines;
+
+    const outcomeRows = detail
+      ? Object.entries(OUTCOME_META)
+          .map(([key, meta]) => ({ meta, count: (detail[key] || []).length }))
+          .filter((r) => r.count > 0)
+      : [];
+
+    let summaryBody;
+    if (stillProcessing) {
+      summaryBody = `<div class="webcall-processing"><div class="webcall-spinner"></div>Still processing this call's outcome — check back in a few seconds, or the Actions screen shortly.</div>`;
+    } else if (detail?.call?.summary) {
+      summaryBody = `<p class="webcall-summary-text">${detail.call.summary}</p>`;
+      if (outcomeRows.length) {
+        summaryBody += `<div class="webcall-outcomes">${outcomeRows
+          .map((r) => `<div class="webcall-outcome"><span class="webcall-outcome-icon">${r.meta.icon}</span>${pluralize(r.count, r.meta)}</div>`)
+          .join("")}</div>`;
+      }
+    } else if (detail) {
+      summaryBody = `<p class="muted">No actionable outcome was logged for this call.</p>`;
+    } else {
+      summaryBody = `<p class="muted">This call is being processed the same way a real phone call would be — check the Actions screen shortly for the logged outcome.</p>`;
+    }
+
     card.innerHTML = `
       <div class="webcall-header">
         <div>
           <div class="webcall-title">Call with ${name} ended</div>
-          <div class="webcall-subtitle">${durationLabel} — here's what was actually said.</div>
+          <div class="webcall-subtitle">${durationLabel}</div>
         </div>
         <button type="button" class="webcall-close" aria-label="Close">✕</button>
       </div>
-      <div class="webcall-summary">
-        <div class="webcall-summary-label">Transcript</div>
+      <div class="webcall-tabs">
+        <button type="button" class="webcall-tab active" data-tab="summary">Call Summary</button>
+        <button type="button" class="webcall-tab" data-tab="transcript">Transcript</button>
+      </div>
+      <div class="webcall-summary" data-panel="summary">${summaryBody}</div>
+      <div class="webcall-summary" data-panel="transcript" hidden>
         ${
-          lines.length
-            ? lines.map((l) => `<div class="webcall-line"><b>${l.role}:</b> ${l.text}</div>`).join("")
+          transcriptLines.length
+            ? transcriptLines.map((l) => `<div class="webcall-line"><b>${l.role}:</b> ${l.text}</div>`).join("")
             : '<div class="muted">No speech was captured this call.</div>'
         }
-        <p class="hint" style="margin-top:14px">This call is also being processed the same way a real phone call would be — check the Actions screen in a moment for the logged outcome.</p>
       </div>`;
+
     card.querySelector(".webcall-close").addEventListener("click", () => overlay.remove());
+    card.querySelectorAll(".webcall-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        card.querySelectorAll(".webcall-tab").forEach((b) => b.classList.toggle("active", b === btn));
+        card.querySelectorAll(".webcall-summary").forEach((p) => (p.hidden = p.dataset.panel !== btn.dataset.tab));
+      });
+    });
+  }
+
+  /** Polls our own backend for the transcript-extraction backfill of the call
+   * that just ended (src/extraction.js, wired into src/callPoller.js — the
+   * same pipeline every other transport uses). There's no PyAI call_id to key
+   * off directly here (the browser talks straight to PyAI now, our server
+   * never sees the session) — matching by "the newest call row started at or
+   * after this call's own start time" is reliable enough for a single-agent
+   * demo instance, and the poller can take up to its ~20s tick interval to
+   * even create the row, so this polls for up to a minute before giving up. */
+  async function pollForBackfill(startedAtMs, { maxAttempts = 20, intervalMs = 3000 } = {}) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const res = await fetch("/api/actions/calls");
+        if (res.ok) {
+          const { calls } = await res.json();
+          const candidate = calls.find((c) => c.started_at * 1000 >= startedAtMs - 5000);
+          if (candidate && candidate.extraction_status !== "pending") {
+            const detailRes = await fetch(`/api/actions/calls/${candidate.id}`);
+            if (detailRes.ok) return await detailRes.json();
+          }
+        }
+      } catch {
+        // Transient — keep polling rather than give up on one failed request.
+      }
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    return null;
   }
 
   window.openWebCallWidget = async function openWebCallWidget(aiName) {
@@ -127,6 +208,7 @@
     let timerHandle = null;
     let startedAt = null;
     let ended = false;
+    let gotAnyAudio = false;
 
     function appendLine(role, text) {
       lines.push({ role, text });
@@ -148,6 +230,7 @@
       ended = true;
       clearInterval(timerHandle);
       const durSec = startedAt ? Math.round((Date.now() - startedAt) / 1000) : 0;
+      const durationLabel = `Call lasted ${formatDuration(durSec)}`;
       try {
         stream?.getTracks().forEach((t) => t.stop());
       } catch {}
@@ -160,7 +243,16 @@
       try {
         ws?.close();
       } catch {}
-      buildSummary(overlay, name, lines, `Call lasted ${formatDuration(durSec)}`);
+
+      // Show something immediately — don't make the caller stare at a blank
+      // screen while the backfill (which can take up to a poller tick) runs.
+      buildSummary(overlay, name, lines, durationLabel, null, true);
+
+      if (startedAt) {
+        pollForBackfill(startedAt).then((detail) => {
+          if (overlay.isConnected) buildSummary(overlay, name, lines, durationLabel, detail, false);
+        });
+      }
     }
 
     closeBtn.addEventListener("click", () => endCall("closed"));
@@ -226,6 +318,26 @@
         timerEl.textContent = formatDuration(Math.round((Date.now() - startedAt) / 1000));
       }, 1000);
       statusEl.textContent = `${name} is listening — go ahead and talk.`;
+
+      // Live-key sessions start streaming real greeting audio within ~100ms
+      // of connecting, with zero configure frame sent (session_label alone
+      // is enough — see src/routes/webcall.js). Sandbox keys, confirmed by
+      // direct testing, don't auto-load anything that way and stay silent
+      // forever otherwise. Rather than always send a configure frame (which
+      // risks overwriting the live-key path's real KB/tools binding for no
+      // benefit — the bug that path used to have), only nudge it if nothing
+      // arrived on its own after a grace window generous enough that the
+      // live-key fast path never reaches it.
+      setTimeout(() => {
+        if (gotAnyAudio || ws.readyState !== WebSocket.OPEN) return;
+        const configureFrame = new TextEncoder().encode(
+          JSON.stringify({ type: "configure", greeting: session.fallback_greeting, persona: session.fallback_persona })
+        );
+        const framed = new Uint8Array(configureFrame.length + 1);
+        framed[0] = TAG.CONTROL;
+        framed.set(configureFrame, 1);
+        ws.send(framed.buffer);
+      }, 1500);
     });
 
     ws.addEventListener("message", (ev) => {
@@ -237,6 +349,7 @@
       const payload = buf.subarray(1);
 
       if (tag === TAG.AUDIO) {
+        gotAnyAudio = true;
         if (!playbackCtx) return;
         // subarray() keeps sharing the original buffer, which is exactly
         // sized to include the tag byte — copy out just the audio bytes

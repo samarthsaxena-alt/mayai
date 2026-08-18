@@ -10,20 +10,33 @@
 // in a function invocation. Minting a token is a single stateless request/
 // response, which runs fine anywhere.
 //
-// Sends NO inline `configure` frame — confirmed by direct testing that
-// session_label alone auto-loads this agent's real greeting/persona/KB/tools
-// binding, exactly like native telephony and the Twilio bridge already do.
-// An earlier version of the (then server-side) relay sent one anyway,
-// containing only {greeting, persona} — no kb/tools keys — which was
-// silently overwriting the auto-loaded binding instead of adding to it.
+// Sends NO inline `configure` frame by default — confirmed by direct testing
+// against a pyai_live_ key that session_label alone auto-loads this agent's
+// real greeting/persona/KB/tools binding, exactly like native telephony and
+// the Twilio bridge already do. An earlier version of the (then server-side)
+// relay sent one anyway, containing only {greeting, persona} — no kb/tools
+// keys — which was silently overwriting the auto-loaded binding instead of
+// adding to it.
 //
-// Token lifetime only gates the initial handshake, not an established call —
-// confirmed by holding a session open well past its token's ttl_seconds with
-// no server-initiated close. session_label is still the agent_id, so
-// src/callPoller.js's existing poll of `GET /v1/omni/calls?session_label=`
-// picks these calls up for free, identical to every other transport.
+// BUT: confirmed by further direct testing (see docs/PLATFORM-NOTES.md) that
+// a pyai_test_ SANDBOX key does NOT auto-load anything from session_label
+// alone — the call connects and stays silent forever, no greeting, nothing —
+// while the identical connection with an inline configure frame works
+// immediately. This is a real, undocumented sandbox-vs-live difference, not
+// a propagation delay (confirmed by retrying the same agent 60s later, still
+// silent) and not something either key type's docs mention. Since this app's
+// own README leads a cold-clone reader to a free sandbox key first, this
+// difference would otherwise make the very first thing they try look broken.
+//
+// The frontend (public/webcall.js) handles this: it waits a short grace
+// window for real audio to start on its own (the live-key fast path), and
+// only sends a fallback configure frame if nothing arrived — so this never
+// touches the already-proven live-key path, which never needs it and would
+// risk the kb/tools-clobbering bug above if it always sent one. That fallback
+// frame needs greeting/persona text, so this endpoint returns them too.
 import { getConfig } from "../db.js";
 import { omni } from "../pyai.js";
+import { buildGreeting, buildPersonaPrompt } from "../promptBuilder.js";
 
 export default async function webcallRoutes(app) {
   app.post("/api/webcall/token", async (req, reply) => {
@@ -53,6 +66,10 @@ export default async function webcallRoutes(app) {
       url: `${session.url}&session_label=${config.agent_id}`,
       expires_at: session.expires_at,
       ai_name: config.ai_name || null,
+      // Only ever used as a fallback nudge if no audio starts on its own
+      // within the grace window — see the header comment above.
+      fallback_greeting: buildGreeting(config),
+      fallback_persona: buildPersonaPrompt(config),
     };
   });
 }
