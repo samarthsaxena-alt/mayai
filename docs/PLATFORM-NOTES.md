@@ -40,15 +40,47 @@ previously-working `scripts/omni-spike.js` unmodified: zero transcript events,
 and a 503 from Speech. Worth an A/B against a known-good script before assuming
 your own change broke something.
 
-## `AgentConfig.greeting` does not auto-load via `session_label`
+**Still reproducing as of this writing** (re-confirmed same-day): a live call
+streams real greeting audio fine, but zero transcript events arrive over the
+WebSocket for either side of the conversation, and `POST /v1/audio/speech`
+still 503s with `"Speech synthesis is unavailable."` This is why
+`npm run spike` reports Step 3 as failed rather than crashing — that step's
+only purpose is synthesizing a fake caller line via that same endpoint for the
+test itself, so its failure doesn't mean your setup is broken, only that this
+one upstream endpoint is currently down. Check before assuming it's fixed.
 
-Contrary to the docs, the greeting did not auto-load from the persistent agent
-profile on a raw session — confirmed `false` until the greeting was sent inline
-in the `configure` frame. `agentSync.js` therefore always sends it inline.
+## `AgentConfig.greeting` auto-loading via `session_label` is inconsistent, not a clean yes/no
 
-Note the tension with the web-calling finding in
-[ARCHITECTURE.md](ARCHITECTURE.md): a *partial* inline `configure` overwrites the
-knowledgebase/tools binding. Send the full config or none of it.
+This has been observed on **both** sides at different times, against the same
+agent, with no code change in between — so treat it as genuinely flaky platform
+behavior, not a fixed rule to code against:
+
+- Direct testing (Aug 2026, later in the same build window as the entry below)
+  found session_label alone *did* reliably auto-load a real, long-established
+  agent's persona/greeting/KB/tools — verified by sampling actual non-silent
+  PCM16 amplitude, not just byte counts — with zero inline `configure` frame
+  sent, on a `pyai_live_` key.
+- The same test against a **`pyai_test_` sandbox key** never auto-loaded
+  anything — connects and stays silent forever (confirmed by retrying the same
+  agent 60s later, ruling out a propagation delay), until an inline `configure`
+  frame is sent, at which point it works immediately.
+- Later the same day, the previously-reliable **live key also went silent** on
+  the identical agent it had worked on minutes earlier — with no code change on
+  either side. Sending a fallback `configure` frame fixed it there too.
+
+**Net effect: don't rely on session_label-alone auto-load, on any key type.**
+The shipped mitigation (`public/webcall.js`) connects normally, waits a short
+grace window for real audio to arrive on its own, and only sends a fallback
+`configure` frame (fetched from `POST /api/webcall/token`'s
+`fallback_greeting`/`fallback_persona`) if nothing arrived — self-healing
+regardless of which of the above is the cause, without ever touching the
+already-working fast path (which never reaches the fallback).
+
+Separately, still confirmed true: a *partial* inline `configure` (just
+`{greeting, persona}`, no `kb`/`tools` keys) silently overwrites the
+knowledgebase/tools binding rather than merging with it — this is why the
+fallback above is a **grace-window fallback**, sent only when actually needed,
+rather than sent unconditionally on every call.
 
 ## `GET /v1/knowledgebases/{id}/documents/{docId}` 404s
 

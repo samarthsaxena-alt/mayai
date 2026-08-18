@@ -5,17 +5,27 @@
 <h1 align="center">MayAI</h1>
 
 <p align="center">
-  <strong>The phone stops ringing out.</strong><br>
-  An AI phone receptionist for small businesses that answers from your own documents —
-  or says it doesn't know. Free, open source (MIT), built on PyAI Omni.
+  <strong>An AI phone receptionist that refuses to guess.</strong>
 </p>
 
 ---
 
-Tell it what you offer — a PDF, a link you already have, or just typed-in text — and
-a real phone number starts answering. It books appointments, answers questions from
-what you gave it, flags special requests, and hands off to a human rather than
-guessing.
+**What it does:** answer your business's phone, book appointments, answer callers'
+questions, and flag special requests — from what you actually gave it (a PDF, a link
+you already have, or text you paste in), not from what a language model assumes.
+Nothing here is a mockup: every screen writes to real PyAI Agent, Knowledgebase, and
+Tools APIs, and editing a field changes what the live agent says on the next call.
+
+**Why it exists:** a generic AI receptionist answers a factual question fluently and
+confidently — including the ones it's making up. That's an amusing demo bug until a
+real caller relies on the answer being true: "no nuts," a listed price, an insurance
+plan accepted. MayAI is built around one rule instead — every factual answer logs a
+`grounded` flag and the exact `source_excerpt` it came from, so "did it actually know
+this, or guess" is something you can check, not just hope for. See
+[The bet](#the-bet) below for the honest version of how well-enforced that rule
+currently is.
+
+Free, open source (MIT), built entirely on PyAI's Omni voice API.
 
 Six industries ship preconfigured: restaurant, real estate, dental, HVAC, legal, and
 skincare. Nothing here is a mockup — every screen is wired to PyAI's real Agents,
@@ -65,14 +75,16 @@ escalated to a person. The billing unit and the audit trail are the same data.
 
 ## Quick start
 
-Requires Node 22+.
+Requires Node 22+. Everything below — including hearing it actually work — uses a
+**free, cardless sandbox key**. This has been verified by cloning the repo into a
+scratch directory and following only these steps, nothing else.
 
 ```bash
 npm install
 cp .env.example .env
 ```
 
-Get a cardless PyAI sandbox key — enough for everything except buying a phone number:
+Get a cardless PyAI sandbox key:
 
 ```bash
 curl -sX POST https://api.pyai.com/v1/sandbox/keys \
@@ -83,15 +95,31 @@ curl -sX POST https://api.pyai.com/v1/sandbox/keys \
 Put it in `.env` as `PYAI_API_KEY`, then:
 
 ```bash
-npm run spike   # smoke test: proves a real Omni session + agent config works
+npm run spike   # smoke test: a real agent, a real Omni session, a real spoken greeting
 npm start       # builder UI + server on http://localhost:8080
 ```
+
+`npm run spike` may report its Step 3 as failed with a Speech-synthesis 503 — that's
+a known, currently-live PyAI-side outage in the one endpoint that step uses only to
+fake a caller's voice for the test itself, not something the real product depends on
+(details in [docs/PLATFORM-NOTES.md](docs/PLATFORM-NOTES.md)). Steps 1-2 passing —
+a real agent created, a real session opened, real greeting audio received — is what
+actually matters, and the script exits cleanly either way.
+
+Open **http://localhost:8080**, go through the three-step Quick Start wizard (name
+your AI, pick an industry, skip the phone-number step for now), then click
+**"Talk to \<name\> right here."** That's a real, live call to a real PyAI voice
+agent, entirely in your browser — no phone number, no cost, and no more setup. This
+is the fastest way to actually hear it work, not just read about it.
 
 For a **real ringing phone number** you need a `pyai_live_` key with credit from
 [console.pyai.com](https://console.pyai.com), and `PUBLIC_HOST` set to a publicly
 reachable host (PyAI validates tool-webhook URLs against an SSRF allow-list, so
 localhost won't do — an `ngrok http 8080` hostname works while developing). Buying a
-number costs real money; the UI confirms before assigning one.
+number costs real money; the UI confirms before assigning one. Nothing before this
+point needs it — setup degrades gracefully (a console warning, not a crash) without
+a public host, and picks tool registration back up automatically the next time you
+save config after setting one.
 
 See [docs/SETUP.md](docs/SETUP.md) for the full path including the Twilio fallback.
 

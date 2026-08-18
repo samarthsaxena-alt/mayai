@@ -4,6 +4,25 @@ An honest account of what works, what is unproven, and what was deliberately not
 built. This is a hackathon build (August 2026), and the point of this document is
 that you should not have to discover any of the below by surprise.
 
+## Verified by actually cloning the repo fresh
+
+The bar for a public repo is that a cold clone gets to something working in
+under 5 minutes without asking a question. This was tested literally — cloned
+into a scratch directory, followed only the README, nothing else — and two real
+bugs were found and fixed as a result, both now verified against that same
+fresh clone:
+
+- **Quick Start crashed on the very first step.** Selecting a template (the
+  first real action after "meet your AI") 500'd with `PUBLIC_HOST must be set`,
+  because tool-webhook registration threw instead of skipping when no public
+  host is configured yet — which is the normal state for a cold sandbox-key
+  setup, exactly what the README leads a new reader to. Fixed: it now skips
+  registration and logs a warning instead, and re-registers automatically the
+  next time config is saved after `PUBLIC_HOST` is set.
+- **Web-calling stayed silent on a sandbox key.** See
+  [PLATFORM-NOTES.md](PLATFORM-NOTES.md#agentconfiggreeting-auto-loading-via-session_label-is-inconsistent-not-a-clean-yesno)
+  — fixed with a grace-window fallback that self-heals regardless of cause.
+
 ## What genuinely works
 
 - **The builder is real, not a mockup.** Every screen writes to actual PyAI Agent
