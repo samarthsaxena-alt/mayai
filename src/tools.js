@@ -136,9 +136,24 @@ export function buildExtractionSchema(config) {
   };
 }
 
+// Null, not a throw, when unset — mirrors agentSync.js's own copy of this
+// same helper. A fresh cold-clone dev setup (sandbox key, no ngrok yet) has
+// no PUBLIC_HOST, and until this returned null here too, that crashed the
+// *entire* Quick Start wizard with a 500 on the very first template-selection
+// step — a real bug, found by literally cloning the repo fresh and clicking
+// through it (see docs/STATUS.md). PyAI's engine can't reach our webhook
+// without a public host regardless, so there was never anything this
+// achieved by throwing instead of degrading.
+let warnedNoPublicHost = false;
 function webhookBase() {
   const host = process.env.PUBLIC_HOST;
-  if (!host) throw new Error("PUBLIC_HOST must be set to register tool webhooks PyAI's engine can reach.");
+  if (!host) {
+    if (!warnedNoPublicHost) {
+      warnedNoPublicHost = true;
+      console.warn("[tools] PUBLIC_HOST not set — skipping tool-webhook registration until it is (see docs/SETUP.md).");
+    }
+    return null;
+  }
   return `https://${host}`;
 }
 
@@ -147,8 +162,21 @@ function webhookBase() {
  * CURRENT template. Re-registers (new tool_id, old one left orphaned but
  * disabled implicitly by no longer being bound) if the template's shape
  * changed since last registration — cheap enough for a single-tenant app.
+ *
+ * Returns {} (skips registration entirely) when PUBLIC_HOST isn't set yet,
+ * rather than throwing — this is the ONE thing standing between a cold clone
+ * and a working Quick Start wizard with just a sandbox key. Nothing is lost
+ * by deferring it: PyAI's own custom tool-calling doesn't fire live on Omni
+ * sessions regardless (see docs/PLATFORM-NOTES.md), so the transcript-
+ * extraction workaround (src/extraction.js) — which needs none of this — is
+ * what actually produces outcomes today. The very next config save after
+ * PUBLIC_HOST is set (e.g. once ngrok is up) registers these for real, since
+ * this always re-syncs rather than gating on a one-time flag.
  */
 export async function ensureToolsRegistered(config) {
+  const base = webhookBase();
+  if (!base) return {};
+
   const secret = process.env.TOOL_WEBHOOK_SECRET;
   if (!secret) throw new Error("TOOL_WEBHOOK_SECRET must be set before registering tools.");
 
@@ -175,7 +203,7 @@ export async function ensureToolsRegistered(config) {
         name: def.name,
         description: def.description,
         input_schema: def.input_schema,
-        webhook_url: `${webhookBase()}/webhooks/tools/${def.name}`,
+        webhook_url: `${base}/webhooks/tools/${def.name}`,
         execution: "server",
         side_effect: def.side_effect,
         auth_header: "X-Tool-Secret",
