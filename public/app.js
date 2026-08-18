@@ -965,6 +965,66 @@ async function renderAdvanced() {
   await renderPhoneNumberBlock(document.getElementById("advanced-numbers"));
 }
 
+// ----------------------------------------------------------------- Outcomes
+// A dedicated top-level page for the exact metrics MayAI is priced on — split
+// out of Analytics (which still shows its own copy of the same top card,
+// alongside the more operational call-volume/status metrics) so this is the
+// first thing anyone clicks when they want "did the AI actually do anything
+// useful," not a scroll-down inside a denser ops dashboard.
+async function renderOutcomes() {
+  const a = await api("/api/analytics/summary");
+  app.innerHTML = "";
+  const groundingPct = a.grounding_rate == null ? null : Math.round(a.grounding_rate * 100);
+
+  const wrap = el(`<div>
+  <div class="card">
+    <h2>Outcomes</h2>
+    <p class="hint">This is what MayAI is actually priced on — real logged actions from real calls, not usage minutes. Zero calls yet = honest zeros here, not a demo chart.</p>
+    <div class="outcome-row">
+      <div class="outcome-tile">
+        <div class="outcome-icon bookings">📅</div>
+        <div><div class="outcome-num">${a.booking_count}</div><div class="outcome-label">${a.booking_label}s made</div></div>
+      </div>
+      <div class="outcome-tile">
+        <div class="outcome-icon grounded">💬</div>
+        <div><div class="outcome-num">${a.qa_total}</div><div class="outcome-label">Questions answered</div></div>
+      </div>
+      <div class="outcome-tile">
+        <div class="outcome-icon notes">📝</div>
+        <div><div class="outcome-num">${a.note_count}</div><div class="outcome-label">${a.note_label}s captured</div></div>
+      </div>
+      <div class="outcome-tile">
+        <div class="outcome-icon escalated">☎️</div>
+        <div><div class="outcome-num">${a.status_breakdown.escalated || 0}</div><div class="outcome-label">Escalations handled</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card gauge-card">
+    <div class="gauge-ring" style="--pct:${groundingPct ?? 0}">
+      <div class="gauge-ring-label">
+        <div class="gauge-ring-num">${groundingPct === null ? "—" : groundingPct + "%"}</div>
+        <div class="gauge-ring-sub">grounded</div>
+      </div>
+    </div>
+    <div>
+      <h2 style="margin-bottom:4px">Grounded answer rate</h2>
+      <p class="hint" style="margin-top:0">The needle-mover metric (see README) — the share of answers that actually traced to real uploaded knowledge instead of being guessed. ${a.total_calls} total calls so far, averaging ${a.avg_call_duration_s ? Math.round(a.avg_call_duration_s) + "s" : "—"} each.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 12px">Recent calls</h3>
+    <p class="hint" style="margin-top:0">Full turn-by-turn detail, including per-call summaries, lives on the <a href="#" id="outcomes-actions-link">Actions</a> screen.</p>
+  </div>
+  </div>`);
+  app.appendChild(wrap);
+  wrap.querySelector("#outcomes-actions-link")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    document.querySelector('#sidenav button[data-tab="actions"]')?.click();
+  });
+}
+
 // ---------------------------------------------------------------- Analytics
 async function renderAnalytics() {
   const a = await api("/api/analytics/summary");
@@ -1075,6 +1135,7 @@ const tabRenderers = {
   knowledge: renderKnowledge,
   callflow: renderCallFlow,
   actions: renderActions,
+  outcomes: renderOutcomes,
   analytics: renderAnalytics,
   advanced: renderAdvanced,
 };
@@ -1086,6 +1147,7 @@ const TAB_TITLES = {
   knowledge: "Knowledge",
   callflow: "Call Flow",
   actions: "Actions",
+  outcomes: "Outcomes",
   analytics: "Analytics",
   advanced: "Advanced",
 };

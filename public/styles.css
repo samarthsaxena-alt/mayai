@@ -446,3 +446,26 @@ tbody tr:hover { background: rgba(42, 26, 32, 0.02); }
 .webcall-summary { padding: 18px 20px; max-height: 420px; overflow-y: auto; }
 .webcall-summary-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted-faint); font-weight: 700; margin-bottom: 10px; }
 
+/* Post-call tabs (Call Summary / Transcript), modeled on AIVA's post-call
+   screen — a plain-English summary first, full transcript one tap away. */
+.webcall-tabs { display: flex; gap: 4px; padding: 0 20px; border-bottom: 1px solid var(--border); }
+.webcall-tab {
+  background: none; border: none; cursor: pointer; padding: 12px 4px; margin-right: 18px;
+  font-size: 13.5px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent;
+}
+.webcall-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.webcall-summary-text { font-size: 14px; line-height: 1.55; margin: 0 0 14px; }
+.webcall-outcomes { display: flex; flex-direction: column; gap: 8px; }
+.webcall-outcome {
+  display: flex; align-items: center; gap: 8px; font-size: 13.5px;
+  padding: 8px 10px; border-radius: 8px; background: var(--bg);
+}
+.webcall-outcome-icon { font-size: 15px; }
+.webcall-processing { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13.5px; }
+.webcall-spinner {
+  width: 14px; height: 14px; border-radius: 50%; flex: 0 0 auto;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: webcall-spin 0.8s linear infinite;
+}
+@keyframes webcall-spin { to { transform: rotate(360deg); } }
+

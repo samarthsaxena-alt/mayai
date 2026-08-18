@@ -207,6 +207,7 @@ ensureColumn("calls", "extraction_status", `extraction_status TEXT NOT NULL DEFA
 ensureColumn("calls", "extraction_error", `extraction_error TEXT`);
 ensureColumn("calls", "transcript_polled_at", `transcript_polled_at INTEGER`);
 ensureColumn("calls", "extraction_attempts", `extraction_attempts INTEGER NOT NULL DEFAULT 0`);
+ensureColumn("calls", "summary", `summary TEXT`);
 ensureColumn("business_config", "ai_name", `ai_name TEXT`);
 ensureColumn("bookings", "source", `source TEXT NOT NULL DEFAULT 'live_tool_call'`);
 ensureColumn("notes", "source", `source TEXT NOT NULL DEFAULT 'live_tool_call'`);

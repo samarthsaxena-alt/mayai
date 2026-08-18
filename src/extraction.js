@@ -104,6 +104,27 @@ async function runExtraction(turns, config) {
   return (response?.content || []).filter((block) => block.type === "tool_use").map((block) => ({ name: block.name, input: block.input }));
 }
 
+const SUMMARY_SYSTEM_PROMPT = `You are writing a short, plain-English summary of a phone call for a busy \
+business owner to skim, right after the call ends. 2-3 sentences, factual, no preamble like "This call was \
+about" — just say what happened, the way a receptionist would report back to their manager. Mention the \
+caller's ask and how it was resolved (booked, answered, escalated, or left unresolved). If the call was a \
+wrong number, silence, or had no real content, say that plainly instead.`;
+
+/** A separate, focused call rather than folding this into runExtraction — a
+ * tool-choice:"auto" turn alongside real tool definitions isn't a reliable
+ * place to also expect free-text prose back. Small added cost/latency is
+ * fine since this whole pipeline already runs async, after the call ends. */
+async function summarizeCall(turns) {
+  const transcriptText = turns.map((t) => `${t.role}: ${t.text}`).join("\n");
+  const response = await anthropicMessages.create({
+    system: SUMMARY_SYSTEM_PROMPT,
+    messages: [{ role: "user", content: `Transcript:\n\n${transcriptText}` }],
+    max_tokens: 200,
+  });
+  const text = (response?.content || []).filter((b) => b.type === "text").map((b) => b.text).join(" ").trim();
+  return text || null;
+}
+
 /**
  * Full pipeline for one ended call: poll transcript -> backfill
  * transcript_lines -> extract actions with Claude -> apply each via the same
@@ -141,12 +162,13 @@ export async function processCallTranscript(callId, agentId, config) {
   }
 
   try {
-    const actions = await runExtraction(turns, config);
+    const [actions, summary] = await Promise.all([runExtraction(turns, config), summarizeCall(turns).catch(() => null)]);
     for (const action of actions) {
       applyExtractedAction(callId, agentId, action.name, action.input, config);
     }
+    if (summary) db.prepare(`UPDATE calls SET summary = ? WHERE id = ?`).run(summary, callId);
     setExtractionStatus(callId, "success");
-    return { status: "success", actions_applied: actions.length };
+    return { status: "success", actions_applied: actions.length, summary };
   } catch (err) {
     setExtractionStatus(callId, "failed", String(err?.message || err));
     return { status: "failed", error: String(err?.message || err) };
